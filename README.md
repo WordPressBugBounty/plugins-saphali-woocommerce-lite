@@ -1,0 +1,1 @@
+# plugins-saphali-woocommerce-lite
