@@ -2,7 +2,7 @@
 Contributors: Saphali
 Plugin Name: Saphali Woocommerce Lite
 Plugin URI: http://saphali.com/saphali-woocommerce-plugin-wordpress
-Donate link: https://send.monobank.ua/4v8nJLeYqb
+Donate link: https://www.paypal.com/donate/?hosted_button_id=SXDLA2N5PE5E6
 Tags: woocommerce, woo commerce Lite, russian ruble, ukrainian hryvnia, mod, manadger filds checkout
 Requires at least: WP 3.3 or higher & WooCommerce 1.6.6 or higher
 Tested up to: 6.4

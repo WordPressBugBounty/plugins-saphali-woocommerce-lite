@@ -877,15 +877,15 @@ public function woocommerce_checkout_posted_data( $data ) {
 						//END Управление публикацией
 						$filds_finish["billing"] = $filds_finish["shipping"] = $filds_finish["order"] = array();
 
-						for($i = 0; $i<count($filds_new["billing"]); $i++) {
+						for($i = 0; $i<count((array)$filds_new["billing"]); $i++) {
 							if(isset($filds_new["billing"][$i]))
 							$filds_finish["billing"] = $filds_finish["billing"] + $filds_new["billing"][$i];
 						}
-						for($i = 0; $i<count($filds_new["shipping"]); $i++) {
+						for($i = 0; $i<count((array)$filds_new["shipping"]); $i++) {
 							if(isset($filds_new["shipping"][$i]))
 							$filds_finish["shipping"] = $filds_finish["shipping"] + $filds_new["shipping"][$i];
 						}
-						for($i = 0; $i<count($filds_new["order"]); $i++) {
+						for($i = 0; $i<count((array)$filds_new["order"]); $i++) {
 							if(isset($filds_new["order"][$i]))
 							$filds_finish["order"] = $filds_finish["order"] + $filds_new["order"][$i];
 						}
