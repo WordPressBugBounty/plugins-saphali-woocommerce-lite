@@ -3,13 +3,13 @@
 Plugin Name: Saphali Woocommerce Lite
 Plugin URI: http://saphali.com/saphali-woocommerce-plugin-wordpress
 Description: Saphali Woocommerce Lite - это бесплатный вордпресс плагин, который добавляет набор дополнений к интернет-магазину на Woocommerce.
-Version: 1.9.3
+Version: 2.0.0
 Author: Saphali
 Author URI: http://saphali.com/
 Text Domain: saphali-woocommerce-lite
 Domain Path: /languages
 WC requires at least: 1.6.6
-WC tested up to: 8.6
+WC tested up to: 9.6
 */
 
 
@@ -29,25 +29,19 @@ WC tested up to: 8.6
 
  */
 use Automattic\WooCommerce\Utilities\FeaturesUtil;
+use Automattic\WooCommerce\Blocks\Utils\CartCheckoutUtils;
+
 /* Add a custom payment class to woocommerce
   ------------------------------------------------------------ */
   if ( ! defined( 'ABSPATH' ) ) {
 	exit; // Don't access directly.
   };
-  // HPOS compatibility declaration.
-add_action(
-	'before_woocommerce_init',
-	function() {
-		if ( class_exists( FeaturesUtil::class ) ) {
-			FeaturesUtil::declare_compatibility( 'custom_order_tables', plugin_basename( __FILE__ ), true );
-		}
-	}
-);
+
   define('SAPHALI_LITE_SYMBOL', 1 );
   
   // Подключение валюты и локализации
  define('SAPHALI_PLUGIN_DIR_URL',plugin_dir_url(__FILE__));
- define('SAPHALI_LITE_VERSION', '1.9.2' );
+ define('SAPHALI_LITE_VERSION', '2.0.0' );
  define('SAPHALI_PLUGIN_DIR_PATH',plugin_dir_path(__FILE__));
  class saphali_lite {
  var $email_order_id;
@@ -56,11 +50,31 @@ add_action(
  var $unuque = array();
  var $locale_tmp;
  var $column_count_saphali;
+ protected $keys;
+ protected $checkout_type;
+
+ protected static $_instance = null;
+    /**
+     * Main saphali_lite Instance.
+     *
+     * @since 1.0.0
+     * @static
+     * @see SaphWooManageFields()
+     * @return saphali_lite - Main instance.
+     */
+    public static function instance()
+    {
+        if (is_null(self::$_instance)) {
+            self::$_instance = new self();
+        }
+        return self::$_instance;
+    }
 	function __construct() {
 		if ( version_compare( WOOCOMMERCE_VERSION, '2.2.0', '<' ) || version_compare( WOOCOMMERCE_VERSION, '2.5.0', '>' ) )
 		add_action('before_woocommerce_init', array($this,'load_plugin_textdomain'), 9);
 	else
 		add_action('before_woocommerce_init', array($this,'load_plugin_textdomain_th'), 9);
+		
 		if ( version_compare( WOOCOMMERCE_VERSION, '2.1.0', '<' ) )  add_action('admin_menu', array($this,'woocommerce_saphali_admin_menu_s_l'), 9);
 		else add_action('admin_menu', array($this,'woocommerce_saphali_admin_menu_s_l'), 10);
 		
@@ -89,7 +103,7 @@ add_action(
 
 			add_filter( 'woocommerce_billing_fields',  array($this,'saphali_custom_billing_fields'), 10, 1 );
 			add_filter( 'woocommerce_shipping_fields',  array($this,'saphali_custom_shipping_fields'), 10, 1 );
-			add_filter( 'woocommerce_default_address_fields',  array($this,'woocommerce_default_address_fields'), 10, 1 );
+			add_filter( 'woocommerce_default_address_fields',  array($this,'woocommerce_default_address_fields'), 10, 2 );
 			//add_filter( 'woocommerce_get_country_locale',  array($this,'woocommerce_get_country_locale'), 10, 1 );
 			add_action('admin_init', array($this,'woocommerce_customer_meta_fields_action'), 20);
 			add_action( 'personal_options_update', array($this,'woocommerce_save_customer_meta_fields_saphali') );
@@ -118,13 +132,17 @@ add_action(
 				}
 			}
 		} else {
-			if($_POST && !wp_verify_nonce( $_POST['_wpnonce'], 'fields-nonce') ){
-				die('Неуспешная верификация');
+			if($_POST ){
+				if(!(isset($_POST['saphali_save_fields']) || isset($_POST['saphali_reset_fields']) ) && !wp_verify_nonce( $_POST['_wpnonce'], 'fields-nonce'))
+				wp_die( __( 'Неуспешная верификация.', 'saphali-woocommerce-lite' ) );
 			}
 		}
 		add_filter( 'woocommerce_currencies',  array($this,'add_inr_currency') , 11);
 		add_filter( 'woocommerce_currency_symbol',  array($this,'add_inr_currency_symbol') , 1, 2 ); 
-		add_action( 'woocommerce_checkout_update_order_meta',   array( $this, 'checkout_update_order_meta' ), 99, 2 );
+		if ( !version_compare( WOOCOMMERCE_VERSION, '3.0.0', '<' ) )
+		add_action( 'woocommerce_checkout_create_order',   array( $this, 'checkout_create_order' ), 99, 2 );
+		else
+			add_action( 'woocommerce_checkout_update_order_meta',   array( $this, 'checkout_update_order_meta' ), 99, 2 );
 		$this->column_count_saphali = get_option('column_count_saphali');
 		if(!empty($this->column_count_saphali)) {
 			global $woocommerce_loop;
@@ -138,13 +156,47 @@ add_action(
 			add_filter( 'woocommerce_admin_shipping_fields', array($this,'woocommerce_admin_shipping_fields'), 10, 1 );
 		}
 		add_filter( 'woocommerce_checkout_posted_data', array($this,'woocommerce_checkout_posted_data'), 10, 1 );
-		add_action("wp_footer", array($this,'print_script_payment_method') );
+		add_action("wp_enqueue_scripts", array($this,'wp_enqueue_scripts') );
 		if( version_compare( WOOCOMMERCE_VERSION, '3.0.0', '<' ) )
 		add_action( 'woocommerce_after_checkout_validation', array( $this, 'after_checkout_validation' ), 10 );
 		else
 		add_action( 'woocommerce_after_checkout_validation', array( $this, 'after_checkout_validation' ), 10, 2 );
+
+		// blocks
+		// add_filter( 'woocommerce_default_address_fields', array($this, 'custom_validate_customer_address'), 10, 2 );
+		add_action('wp_error_added', array($this, 'wp_error_added'), 10, 4);
+		// do_action( 'wp_error_added', $code, $message, $data, $this );
 	}
+	function wp_error_added( $code, $message, $address_field_key, $wp_error ) {
+		if(!class_exists('Saphali_DateTime_Checkout_Field')) return;
+		$checkout_fields = SaphWooDateTime_Checkout_Field()->get_fields();
+		$finish_fields = array();
+		if ($checkout_fields) {
+			foreach (array('billing', 'shipping') as $method) {
+				if (isset($checkout_fields[$method])) {
+					foreach ($checkout_fields[$method] as $key => $val) {
+						$finish_fields[$method][str_replace("{$method}_", '', $key)] = $val['required'];
+					}
+					foreach ($checkout_fields['extra']['dellete_fields'] as $f) {
+						$finish_fields[$method][str_replace("{$method}_", '', $f)] = false;
+					}
+				}
+			}
+		}
+
+		if(strpos($message, str_replace('%s', '', __( '%s is required', 'woocommerce' ) ))) {
+			if(isset($finish_fields[$code][$address_field_key]) && !$finish_fields[$code][$address_field_key]) {
+				$wp_error->remove($code);
+			}
+		}
+	}
+	function custom_validate_customer_address( $address, $context = '' ) {
+		// Удаляем валидацию для first_name
+		// error_log(__FUNCTION__ . " " . __LINE__ . " | \n {$context} => " . var_export($address, true) );
+		
 	
+		return $address;
+	}
 	public function remove_no_valid_filds($key, $value, $errors) {
 		if (  version_compare( WOOCOMMERCE_VERSION, '3.0.0', '<' ) ) {
 			$is_e = true;
@@ -379,96 +431,75 @@ public function woocommerce_checkout_posted_data( $data ) {
 			wc_add_notice( $m, 'error' );
 		}
 	}
-	function print_script_payment_method() {
+	function wp_enqueue_scripts() {
 		if(!function_exists('is_cart')) return;
 		if( !(is_cart() || is_checkout()) ) return;
-		if(! isset($this->fieldss) )
-			$this->fieldss = get_option('woocommerce_saphali_filds_filters');
-		$fieldss = $this->fieldss;
 		
-		foreach(array('billing', 'shipping') as  $type) {
-			if(isset($fieldss[$type]) && is_array($fieldss[$type])) {
-				foreach($fieldss[$type] as $key => $value) {
-					if(isset($value['payment_method'])) {
-						$pm_k_remove = array();
-						if(is_array($value['payment_method']))
-						foreach($value['payment_method'] as $k => $v) {
-							if($v === '0') {
-								$pm_k_remove[] = $k;
+		if($this->get_checkout_type() === 'block') return;
+		// Подключаем скрипты
+		$asset_file = plugin_dir_path(__FILE__) . 'build/classic/frontend-classic.asset.php';
+		if (file_exists($asset_file)) {
+			$asset_info = include $asset_file;
+			wp_register_script(
+				'saphali-woocommerce-lite-frontend-classic',
+				plugins_url('build/classic/frontend-classic.js', __FILE__),
+				$asset_info['dependencies'] + ['jquery'],
+				$asset_info['version'],
+				true
+			); 
+			if(! isset($this->fieldss) )
+			$this->fieldss = get_option('woocommerce_saphali_filds_filters');
+			$fieldss = $this->fieldss;
+			
+			foreach(array('billing', 'shipping') as  $type) {
+				if(isset($fieldss[$type]) && is_array($fieldss[$type])) {
+					foreach($fieldss[$type] as $key => $value) {
+						if(isset($value['payment_method'])) {
+							$pm_k_remove = array();
+							if(is_array($value['payment_method']))
+							foreach($value['payment_method'] as $k => $v) {
+								if($v === '0') {
+									$pm_k_remove[] = $k;
+								}
+							}
+							foreach($pm_k_remove as $k_remove) {
+								unset($value['payment_method'][$k_remove]);
 							}
 						}
-						foreach($pm_k_remove as $k_remove) {
-							unset($value['payment_method'][$k_remove]);
+						if(isset($value['payment_method']) && !empty($value['payment_method'])) {
+							$keys[ $key ] = $value['payment_method'];
 						}
-					}
-					if(isset($value['payment_method']) && !empty($value['payment_method'])) {
-						$keys[ $key ] = $value['payment_method'];
-					}
-					if(isset($value['shipping_method'])) {
-						$pm_k_remove = array();
-						if(is_array($value['shipping_method']))
-						foreach($value['shipping_method'] as $k => $v) {
-							if($v === '0') {
-								$pm_k_remove[] = $k;
+						if(isset($value['shipping_method'])) {
+							$pm_k_remove = array();
+							if(is_array($value['shipping_method']))
+							foreach($value['shipping_method'] as $k => $v) {
+								if($v === '0') {
+									$pm_k_remove[] = $k;
+								}
+							}
+							foreach($pm_k_remove as $k_remove) {
+								unset($value['shipping_method'][$k_remove]);
 							}
 						}
-						foreach($pm_k_remove as $k_remove) {
-							unset($value['shipping_method'][$k_remove]);
+						if(isset($value['shipping_method']) && !empty($value['shipping_method'])) {
+							$skeys[ $key ] = $value['shipping_method'];
 						}
-					}
-					if(isset($value['shipping_method']) && !empty($value['shipping_method'])) {
-						$skeys[ $key ] = $value['shipping_method'];
 					}
 				}
 			}
+			wp_localize_script(
+				'saphali-woocommerce-lite-frontend-classic', // saphaliWoocommerceLiteSettings.saphaliKeys`
+				'saphaliWoocommerceLiteSettings', // saphaliWoocommerceLiteSettings.saphaliKeys
+				array(
+					'keys' => isset($keys) ? $keys : array(),
+					'skeys' => isset($skeys) ? $skeys : array(),
+				) // Массив с ключами
+			);
+			wp_enqueue_script('saphali-woocommerce-lite-frontend-classic');
 		}
-		?>
-		<script>
-		var $keys = <?php if( isset($keys) ) echo json_encode($keys); else echo '[]'; ?>;
-		var $skeys = <?php if( isset($skeys) ) echo json_encode($skeys); else echo '[]'; ?>;
-		function corect_payment_method_filds () {
-			var selected_p_method = jQuery("input[name=\"payment_method\"]:checked").val();
-			jQuery.each($keys, function(i,e){	
-				e = Object.keys(e).map(function(v){ return e[v]});	
-				if( jQuery.inArray( selected_p_method, e ) >= 0 ) {
-					if( ! ( jQuery("#billing_platelshik_is_grpl").is(':checked') && ( i == 'billing_gruzopoluch' || i == 'billing_gruzopoluch_okpo') ) )
-					jQuery("#" + i + "_field").show('slow');
-				} else {
-					jQuery("#" + i + "_field").hide('slow');
-				}
-			});
-		}
-		function corect_shipping_method_filds () {
-			var selected_s_method = typeof jQuery("input.shipping_method:checked, input.shipping_method[type=\"hidden\"], select.shipping_method").val() != 'undefined' ? jQuery("input.shipping_method:checked, input.shipping_method[type=\"hidden\"], select.shipping_method").val().split(":")[0] : '';
-			jQuery.each($skeys, function(i,e){	
-				e = Object.keys(e).map(function(v){ return e[v]});
-				if( jQuery.inArray( selected_s_method, e ) >= 0 || e.filter(function(v){ return selected_s_method.indexOf(v) === 0; }).length > 0 ) {
-					jQuery("#" + i + "_field").show('slow');
-				} else {
-					jQuery("#" + i + "_field").hide('slow');
-				}
-			});
-		}
-		jQuery("body").delegate("input[name=\"payment_method\"]", 'click', function(){
-			corect_payment_method_filds ();
-		});
-		jQuery("body").on("payment_method_selected", function(){
-			corect_payment_method_filds ();
-		});
-		jQuery("body").delegate("input.shipping_method", 'click', function(){
-			corect_shipping_method_filds ();
-		});
-		jQuery("body").delegate("select.shipping_method", 'change', function(){
-			corect_shipping_method_filds ();
-		});
-		jQuery('body').bind('updated_checkout', function() {
-			corect_payment_method_filds ();
-			corect_shipping_method_filds ();
-		});
-		</script>
-		<?php
 	}
 	function formatted_billing_address($address, $order) {
+		if( !version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) return $address;
 		$billing_data = $this->woocommerce_get_customer_meta_fields_saphali();
 		foreach ( array("billing") as $type )
 		{
@@ -478,10 +509,11 @@ public function woocommerce_checkout_posted_data( $data ) {
 					
 					if (isset($field['public']) && $field['public'] ) {
 						$id = method_exists($order, 'get_id') ? $order->get_id() : $order->id;
+						
 						$address[str_replace($type . '_', '', $key)] = get_post_meta( $id, '_' . $key, true );
-						if( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) && !empty($address[str_replace($type . '_', '', $key)]) && ( strpos($key, 'new_fild') !== false) && (isset($this->unuque) && !in_array($key, $this->unuque) ) ) {
+						if(!empty($address[str_replace($type . '_', '', $key)]) && ( strpos($key, 'new_fild') !== false) && (isset($this->unuque) && !in_array($key, $this->unuque) )) {
 							$this->unuque[] = $key;
-							echo  '<label><strong>'. $field['label']. ':</strong></label> ' . $address[str_replace($type . '_', '', $key)].'<br />';
+							echo  '<label><strong>'. $field['label']. ':</strong></label> ' . $address[str_replace($type . '_', '', $key)].'<br />';	
 						}
 					}
 				}
@@ -490,13 +522,14 @@ public function woocommerce_checkout_posted_data( $data ) {
 		return($address);
 	}
 	function formatted_shipping_address($address, $order) {
+		if( !version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) return $address;
 		$billing_data = $this->woocommerce_get_customer_meta_fields_saphali();
 		if(isset($billing_data["order"]) && is_array($billing_data["order"])) {
 			foreach ( $billing_data["order"] as $key => $field ) {
 				if (isset($field['show']) && !$field['show'] || $key == 'order_comments') continue;
 				$id = method_exists($order, 'get_id') ? $order->get_id() : $order->id;
 				$address[ str_replace('order_', '', $key) ] = get_post_meta( $id, '_' . $key, true );
-				if( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) && !empty($address[ str_replace('order_', '', $key) ]) && ( strpos($key, 'new_fild') === false) && (isset($this->unuque) && !in_array($key, $this->unuque) ) ) {
+				if( !empty($address[ str_replace('order_', '', $key) ]) && ( strpos($key, 'new_fild') === false) && (isset($this->unuque) && !in_array($key, $this->unuque) ) ) {
 					$this->unuque[] = $key;
 					echo  '<label><strong>'. $field['label']. ':</strong></label> ' . $address[ str_replace('order_', '', $key) ] . '<br />';
 				}
@@ -510,11 +543,11 @@ public function woocommerce_checkout_posted_data( $data ) {
 					
 					if (isset($field['public']) && $field['public'] ) {
 						$id = method_exists($order, 'get_id') ? $order->get_id() : $order->id;
+					
 						$address[str_replace($type . '_', '', $key)] = get_post_meta( $id, '_' . $key, true );
-						if( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) && !empty($address[str_replace($type . '_', '', $key)]) && ( strpos($key, 'new_fild') === false) && (isset($this->unuque) && !in_array($key, $this->unuque) ) ) {
-							$this->unuque[] = $key;
-							echo  '<label><strong>'. $field['label']. ':</strong></label> ' . $address[str_replace($type . '_', '', $key)].'<br />';						
-						}
+						$this->unuque[] = $key;
+						if(!empty($address[str_replace($type . '_', '', $key)]) && ( strpos($key, 'new_fild') === false) && (isset($this->unuque) && !in_array($key, $this->unuque) ))
+						echo  '<label><strong>'. $field['label']. ':</strong></label> ' . $address[str_replace($type . '_', '', $key)].'<br />';	
 						
 					}
 				}
@@ -574,8 +607,42 @@ public function woocommerce_checkout_posted_data( $data ) {
 			add_filter( 'woocommerce_'.wc_edit_address_i18n( sanitize_key( $wp->query_vars['edit-address'] ), true ) .'_fields',  array($this,'saphali_custom_edit_address_fields'), 10, 1 );
 		}
 	}
+	public function checkout_create_order( $order, $data ) {
+		$billing_data = $this->woocommerce_get_customer_meta_fields_saphali();
+		
+		if(is_array($billing_data["order"])) {
+			foreach ( $billing_data["order"] as $key => $field ) {
+				if (isset($field['show']) && !$field['show'] || $key == 'order_comments') continue;
+				if(isset($_POST[$key])){
+					$custom_field = sanitize_text_field( $_POST[$key] );
+					$order->update_meta_data( '_' . $key, $custom_field );
+				} elseif ( isset( $data['order'][$key] ) ) {
+					$custom_field = sanitize_text_field( $data['order'][$key] );
+					$order->update_meta_data( '_' . $key, $custom_field );
+				}
+			}
+		}
+		foreach ( array("billing", "shipping") as $type )
+		{
+			if ( isset($billing_data[$type]) && is_array($billing_data[$type]))
+			{
+				foreach ( $billing_data[$type] as $key => $field ) {
+					
+					if (isset($field['public']) && $field['public']) {
+						if(isset($_POST[$key])){
+							$custom_field = sanitize_text_field( $_POST[$key] );
+							$order->update_meta_data( '_' . $key, $custom_field );
+						} elseif ( isset( $data[$type][$key] ) ) {
+							$custom_field = sanitize_text_field( $data[$type][$key] );
+							$order->update_meta_data( '_' . $key, $custom_field );
+						}
+					}
+				}
+			}
+		}
+	}
 	public function checkout_update_order_meta( $order_id, $posted ) {
-		if ( !version_compare( WOOCOMMERCE_VERSION, '2.1.0', '<' ) ) {
+		if ( !version_compare( WOOCOMMERCE_VERSION, '2.1.0', '<' ) &&  version_compare( WOOCOMMERCE_VERSION, '3.0.0', '<' ) ) {
 			$billing_data = $this->woocommerce_get_customer_meta_fields_saphali();
 			if(is_array($billing_data["order"])) {
 				foreach ( $billing_data["order"] as $key => $field ) {
@@ -589,7 +656,6 @@ public function woocommerce_checkout_posted_data( $data ) {
 				if ( isset($billing_data[$type]) && is_array($billing_data[$type]))
 				{
 					foreach ( $billing_data[$type] as $key => $field ) {
-						
 						if (isset($field['public']) && $field['public'] && !empty($_POST[$key])) {
 							update_post_meta( $order_id, '_' . $key, $_POST[$key] );
 						}
@@ -633,11 +699,19 @@ public function woocommerce_checkout_posted_data( $data ) {
 	public function load_plugin_textdomain() {
 		load_plugin_textdomain( 'woocommerce',  false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 		load_plugin_textdomain( 'saphali-woocommerce-lite',  false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+		// HPOS compatibility declaration.
+		if ( class_exists( FeaturesUtil::class ) ) {
+			FeaturesUtil::declare_compatibility( 'custom_order_tables', plugin_basename( __FILE__ ), true );
+		}
 	}
 	public function load_plugin_textdomain_th() {
 		load_plugin_textdomain( 'saphali-woocommerce-lite',  false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 	}
-	public function woocommerce_default_address_fields($locale) {
+	public function woocommerce_default_address_fields($locale, $context = '') {
+		if($this->get_checkout_type() === 'block') {
+			
+			// return $this->custom_validate_customer_address($locale, $context); 
+		}
 		$fieldss = get_option('woocommerce_saphali_filds_locate');
 		if(is_array($fieldss)) {
 			foreach($fieldss as $_k => $_v) {
@@ -761,741 +835,120 @@ public function woocommerce_checkout_posted_data( $data ) {
 	function admin_enqueue_scripts_page_saphali() {
 		global $woocommerce;
 		$plugin_url = plugins_url( basename( plugin_dir_path(__FILE__) ), basename( __FILE__ ) );
-		if( isset($_GET['page']) && $_GET['page'] == 'woocommerce_saphali_s_l' )
-		wp_enqueue_script( 'tablednd', $plugin_url. '/js/jquery.tablednd.0.5.js', array('jquery'), $woocommerce->version );
+		if( isset($_GET['page']) && $_GET['page'] == 'woocommerce_saphali_s_l' ) {
+			wp_enqueue_script( 'tablednd', $plugin_url. '/js/jquery.tablednd.0.5.js', array('jquery'), $woocommerce->version );
+			$get_keys = $this->get_keys_method_checkout();
+			$scr = $this->get_checkout_type() === 'block' ? SAPHALI_PLUGIN_DIR_URL . 'js/saphali-admin-block.js' : SAPHALI_PLUGIN_DIR_URL . 'js/saphali-admin.js';
+			wp_register_script(
+				'saphali-admin-settings-page',
+				$scr,
+				array('tablednd'),
+				SAPHALI_LITE_VERSION,
+				true
+			);
+
+			wp_localize_script(
+                'saphali-admin-settings-page',
+                'saphaliSettings', // saphaliSettings.add2
+                array(
+                    'delete' => __('Удалить', 'saphali-woocommerce-lite'),
+                    'add' => __('Добавить', 'saphali-woocommerce-lite'),
+                    'add2' => __('Добавить еще', 'saphali-woocommerce-lite'),
+					'saphaliKeys' => $get_keys['keys'],
+					'saphaliSkeys' => $get_keys['skeys'],
+                ) // Массив с ключами
+            );
+			wp_enqueue_script( 'saphali-admin-settings-page' );
+
+            wp_enqueue_style('saphali-admin-style', $plugin_url. '/css/saphali-admin.css', array(), '1.0');
+		}
 	}
+	function get_keys_method_checkout() {
+        global $woocommerce;
+		if(isset($this->keys)) return $this->keys;
+        $keys = $skeys = array();
+        foreach ($woocommerce->payment_gateways->payment_gateways() as $gateway) {
+            // if ($gateway->enabled != 'yes') continue;
+            $keys[$gateway->id] = $gateway->title;
+        }
+        foreach ($woocommerce->shipping->get_shipping_methods() as $act_id => $shipping) {
+            // if ($shipping->enabled == 'no') continue;
+            $skeys[$act_id] = $shipping->title ? $shipping->title : $shipping->method_title;
+        }
+        $this->keys = array(
+            'keys' => $keys,
+            'skeys' => $skeys,
+        );
+		return $this->keys;
+    }
 	function woocommerce_saphali_page_s_l () {
-		?>
-		<div class="wrap woocommerce"><div class="icon32 icon32-woocommerce-reports" id="icon-woocommerce"><br /></div>
-			<h2 class="nav-tab-wrapper woo-nav-tab-wrapper">
-			Настройки Saphali WC
-			</h2>
-			<ul class="subsubsub">
-				 <li><a href="admin.php?page=woocommerce_saphali_s_l" <?php if(empty($_GET["tab"])) echo 'class="current"';?> >Управление полями</a> | </li>
-				 <li><a href="admin.php?page=woocommerce_saphali_s_l&tab=2" <?php if(!empty($_GET["tab"]) && $_GET["tab"] == 2) echo 'class="current"';?>>Число колонок в каталоге</a> | </li>
-				 <li><a href="admin.php?page=woocommerce_saphali_s_l&tab=1" <?php if(!empty($_GET["tab"]) && $_GET["tab"] == 1) echo 'class="current"';?>><span color="red">Дополнительная информация</span></a></li>
-			</ul>
-			<?php if(empty($_GET["tab"])) {
-				$this->locale_tmp = get_locale();
-				if( !empty($this->locale_tmp) && $this->locale_tmp != 'en_US') {
-					switch_to_locale('en_US');
-				}
-				global $woocommerce;
-				remove_filter( 'woocommerce_checkout_fields' , 'woo_customize_checkout_fields' );
-				if ( empty( $woocommerce->checkout ) ) {
-					
-					if ( version_compare( WOOCOMMERCE_VERSION, '2.0', '<' ) ) { 
-						include_once( WP_PLUGIN_DIR . '/' . $woocommerce->template_url. 'classes/class-wc-checkout.php' ); 
-					} elseif ( !version_compare( WOOCOMMERCE_VERSION, '2.3', '<' ) ) {
-						include_once( WP_PLUGIN_DIR . '/' . str_replace( array('compatability/2.3/', 'compatibility/2.4/'), '', WC()->template_path() ) . 'includes/class-wc-autoloader.php' ); 
-						$load = new WC_Autoloader();
-						if(!class_exists('WC_Cart')) $load->autoload( 'WC_Cart' );if(!class_exists('WC_Customer')) $load->autoload( 'WC_Customer' );  $load->autoload( 'WC_Checkout' ); if ( !version_compare( WOOCOMMERCE_VERSION, '2.2', '<' ) ) { include_once( WP_PLUGIN_DIR . '/' . str_replace( array('compatability/2.3/', 'compatibility/2.4/'), '', WC()->template_path() ) . 'includes/abstracts/abstract-wc-session.php' ); include_once( WP_PLUGIN_DIR . '/' . str_replace( array('compatability/2.3/', 'compatibility/2.4/'), '', WC()->template_path() ) . 'includes/class-wc-session-handler.php' );  $woocommerce->session =  new WC_Session_Handler();} else {
-							 $woocommerce->autoload( 'WC_Session' ); 
-							 $woocommerce->autoload( 'WC_Session_Handler' ); 
-						}  
-					} else { 
-						if(!class_exists('WC_Cart')) $woocommerce->autoload( 'WC_Cart' );if(!class_exists('WC_Customer')) $woocommerce->autoload( 'WC_Customer' );  $woocommerce->autoload( 'WC_Checkout' ); if ( !version_compare( WOOCOMMERCE_VERSION, '2.2', '<' ) ) { include_once( WP_PLUGIN_DIR . '/' . str_replace( array('compatability/2.2/','compatability/2.3/', 'compatibility/2.4/'), '', WC()->template_path() ) . 'includes/abstracts/abstract-wc-session.php' ); include_once( WP_PLUGIN_DIR . '/' . str_replace( array('compatability/2.2/','compatability/2.3/', 'compatibility/2.4/'), '', WC()->template_path() ) . 'includes/class-wc-session-handler.php' );  $woocommerce->session =  new WC_Session_Handler();} else {
-							 $woocommerce->autoload( 'WC_Session' ); 
-							 if ( !version_compare( WOOCOMMERCE_VERSION, '2.1', '<' ))
-							 $woocommerce->autoload( 'WC_Session_Handler' ); 
-						}
-					}
-					if(class_exists('WC_Checkout')) {
-						if(class_exists('WC_Customer')) $woocommerce->customer =  new WC_Customer();
-						if(class_exists('WC_Cart')) $woocommerce->cart =  new WC_Cart();
-						$f = new WC_Checkout();
-					}
-				}
-				 else	$f = $woocommerce->checkout; 
-				 $global_f_checkout_fields = $f->checkout_fields;
+		if($this->get_checkout_type() === 'block')
+			require_once (SAPHALI_PLUGIN_DIR_PATH . 'admin/admin-page-block.php');
+		else
+			require_once (SAPHALI_PLUGIN_DIR_PATH . 'admin/admin-page.php');
+	}
+	public function get_checkout_type() {
+		// CartCheckoutUtils::is_checkout_block_default()
 
-				if( !empty($this->locale_tmp) && $this->locale_tmp != 'en_US') {
-					switch_to_locale($this->locale_tmp);
-				}
-				if($_POST && wp_verify_nonce( $_POST['_wpnonce'], 'fields-nonce') ){
-					if(@$_POST["reset"] != 'All') {
-						// Управление новыми полями
-						foreach( array('billing', 'shipping', 'order') as $method)
-						if(@is_array($_POST[$method]["new_fild"])) {
-							foreach ($_POST[$method]["new_fild"] as $k_nf => $v_nf) {
-								if ($k_nf == 'name') continue;
-								if (is_array($v_nf))
-									foreach ($v_nf as $k_nf_f => $v_nf_f) {
-										$new_fild = isset($_POST[$method]["new_fild"]['name'][$k_nf_f]) ? $_POST[$method]["new_fild"]['name'][$k_nf_f] : $new_fild;
-										if ($k_nf == 'class') {
-											$addFild[$method][$new_fild][$k_nf] = array($v_nf_f);
-										} elseif ($k_nf == 'options') {
-											foreach ($v_nf_f as $val_v_nf_f) {
-												$index = isset($addFild[$method][$new_fild][$k_nf])  ? (sizeof($addFild[$method][$new_fild][$k_nf]) + 1) : 1;
-												$addFild[$method][$new_fild][$k_nf]['option-' . $index] = $val_v_nf_f;
-											}
-										} elseif ($k_nf == 'type') {
-											// echo '<pre>';var_dump($v_nf_f);echo '</pre>';
-											$addFild[$method][$new_fild][$k_nf] = is_array($v_nf_f) ? current($v_nf_f) : $v_nf_f;
-										} else $addFild[$method][$new_fild][$k_nf] = $v_nf_f;
-									}
-							}
-					
-							unset($new_fild, $_POST[$method]["new_fild"]);
-						}
-						//END 
-						$filds = $global_f_checkout_fields;
-						foreach( array('billing', 'shipping', 'order') as $method)
-						if(is_array($filds[$method])) {
-						if(!isset($addFild[$method]) || isset($addFild[$method]) && !is_array($addFild[$method])) $addFild[$method] = array();
-						if( !isset($_POST[$method]) || isset($_POST[$method]) && !is_array($_POST[$method])) $_POST[$method] = array();
-						$filds[$method] = array_merge($filds[$method] ,  $_POST[$method], $addFild[$method]);
+		if(isset($this->checkout_type)) return $this->checkout_type;
+        // Получаем ID страницы чекаута
+		if(class_exists('CartCheckoutUtils')) {
+			if(CartCheckoutUtils::is_checkout_block_default()) {
+				$this->checkout_type = 'block';
+				return $this->checkout_type;
+			}
+		}
+        $checkout_page_id = wc_get_page_id( 'checkout' );
 
-						foreach($filds[$method] as $key_post => $value_post) {
-							$filds[$method][$key_post]["label"] = str_replace("'", '&rsquo;', stripcslashes($filds[$method][$key_post]["label"]) );
-							$value_post["label"] = str_replace("'", '&rsquo;', stripcslashes($value_post["label"]) );
-							if( !isset($global_f_checkout_fields[$method][$key_post]['type']) &&  (isset($filds[$method][$key_post]['type']) && $filds[$method][$key_post]['type'] != 'select' && $filds[$method][$key_post]['type'] != 'radio' && $filds[$method][$key_post]['type'] != 'checkbox' && $filds[$method][$key_post]['type'] != 'textarea' || !isset($filds[$method][$key_post]['type']))  ) unset($filds[$method][$key_post]['type'],  $value_post["type"]);
+        if ( ! $checkout_page_id || $checkout_page_id <= 0 ) {
+			$this->checkout_type = 'unknown';
+            return $this->checkout_type;
+        }
 
-							
-							if(@$filds[$method][$key_post]['public'] != 'on') {
-								if(isset($filds[$method][$key_post]["order"]))
-									$filds_new[$method][$filds[$method][$key_post]["order"]][$key_post]["public"] = false;
-								$fild_remove_filter[$method][] = $key_post;
-							} elseif(isset($filds[$method][$key_post]["order"])) {$filds_new[$method][$filds[$method][$key_post]["order"]][$key_post]["public"] = true;}
+        // Получаем содержимое страницы чекаута
+        $checkout_page_content = get_post_field( 'post_content', $checkout_page_id );
 
-							
-							foreach($value_post as $k_post=> $v_post){
-								if( 'on' == $v_post  ) {
-									$filds[$method][$key_post][$k_post] = true;
-									$value_post[$k_post] = true;
-								} elseif(in_array($k_post, array('public','clear','required'))) {  $filds[$method][$key_post][$k_post] = false; $value_post[$k_post] = false; if(!$filds[$method][$key_post][$k_post] && $k_post == 'public') unset($filds[$method][$key_post][$k_post]); }
-							}
-							if(isset($filds[$method][$key_post]["order"]))
-							$filds_new[$method][$filds[$method][$key_post]["order"]][$key_post] = $value_post;
-							
-							unset($_POST[$method][$key_post]);
-						}
+        if ( ! $checkout_page_content ) {
+			$this->checkout_type = 'unknown';
+			return $this->checkout_type;
+        }
 
-						}
-						
+        // Проверяем на наличие шорткода [woocommerce_checkout]
+        if ( has_shortcode( $checkout_page_content, 'woocommerce_checkout' ) ) {
+			$this->checkout_type = 'classic';
+			return $this->checkout_type;
+        }
 
-						//END Управление публикацией
-						$filds_finish["billing"] = $filds_finish["shipping"] = $filds_finish["order"] = array();
-
-						for($i = 0; $i<count((array)$filds_new["billing"]); $i++) {
-							if(isset($filds_new["billing"][$i]))
-							$filds_finish["billing"] = $filds_finish["billing"] + $filds_new["billing"][$i];
-						}
-						for($i = 0; $i<count((array)$filds_new["shipping"]); $i++) {
-							if(isset($filds_new["shipping"][$i]))
-							$filds_finish["shipping"] = $filds_finish["shipping"] + $filds_new["shipping"][$i];
-						}
-						for($i = 0; $i<count((array)$filds_new["order"]); $i++) {
-							if(isset($filds_new["order"][$i]))
-							$filds_finish["order"] = $filds_finish["order"] + $filds_new["order"][$i];
-						}
-
-						$filds_finish_filter = $filds_finish;
-						if(is_array($fild_remove_filter["billing"])) {
-							foreach($fild_remove_filter["billing"] as $v_filt){
-								unset($filds_finish_filter["billing"][$v_filt]);
-							}
-						}
-						if(isset($fild_remove_filter["shipping"]) && is_array($fild_remove_filter["shipping"])) {
-							foreach($fild_remove_filter["shipping"] as $v_filt){
-								unset($filds_finish_filter["shipping"][$v_filt]);
-							}
-						}
-						if(isset($fild_remove_filter["order"]) && is_array($fild_remove_filter["order"])) {
-							foreach($fild_remove_filter["order"] as $v_filt){
-								unset($filds_finish_filter["order"][$v_filt]);
-							}
-						}
-						update_option('woocommerce_saphali_filds',$filds_finish);
-						update_option('woocommerce_saphali_filds_filters',$filds_finish_filter);
-						foreach($filds_finish_filter['billing'] as $k_f => $v_f) {
-							$new_key = str_replace('billing_', '' , $k_f);
-							if(in_array($new_key, array('country', 'first_name', 'last_name', 'company', 'address_1', 'address_2', 'city', 'state', 'postcode' ) ))
-							$locate[$new_key] = $v_f;
-							elseif(in_array(str_replace('shipping_', '' , $k_f), array('country', 'first_name', 'last_name', 'company', 'address_1', 'address_2', 'city', 'state', 'postcode' ) )) {
-								$locate[$new_key] = $filds_finish_filter['shipping'][$k_f];
-							}
-						}
-						foreach ($filds_finish_filter['shipping'] as $k_f => $v_f) {
-							$new_key = str_replace('shipping_', '', $k_f);
-							if(isset($locate[$new_key])) continue;
-							if (in_array($new_key, array('country', 'first_name', 'last_name', 'company', 'address_1', 'address_2', 'city', 'state', 'postcode')))
-							$locate[$new_key] = $v_f;
-							elseif (in_array(str_replace('billing_', '', $k_f), array('country', 'first_name', 'last_name', 'company', 'address_1', 'address_2', 'city', 'state', 'postcode'))) {
-								$locate[$new_key] = $filds_finish_filter['billing'][$k_f];
-							}
-						}
-						if(!update_option('woocommerce_saphali_filds_locate',$locate))add_option('woocommerce_saphali_filds_locate',$locate);
-					} else {
-							delete_option('woocommerce_saphali_filds');
-							delete_option('woocommerce_saphali_filds_filters'); 
-							delete_option('woocommerce_saphali_filds_locate'); 
-						}
-				}
-				add_filter('woocommerce_pre_remove_cart_item_from_session', function() { return true; });
-			?>
-			<div class="clear"></div>
-			<h3 class="nav-tab-wrapper woo-nav-tab-wrapper" style="text-align: center;">Управление полями на странице заказа и на странице профиля</h3>
-		 <?php if($_POST && ( isset($_POST["reset"]) && $_POST["reset"] != 'All' || !isset($_POST["reset"]) )) {
-			if(!wp_verify_nonce( $_POST['_wpnonce'], 'fields-nonce')) {
-				?><div class="error"><p>Настройки не сохранены. Неуспешная верификация</p></div><?php
-			} else {
-				?><div class="updated"><p>Настройки сохранены</p></div><?php 
-			} 
-			} ?>
-			<h2 align="center">Реквизиты оплаты</h2>
-			<form action="" method="post">
-			<input type="hidden" name="_wpnonce" value="<?php echo wp_create_nonce('fields-nonce'); ?>">
-			<table class="wp-list-table widefat fixed posts" cellspacing="0">
-			<thead>
-				<tr>
-					<th width="130px">Название<img class="help_tip" data-tip="Название поля должно быть уни&shy;ка&shy;ль&shy;ным (не должно повторяться)." src="<?php bloginfo('wpurl');?>/wp-content/plugins/woocommerce/assets/images/help.png" /></th>
-					<th width="130px">Заголовок</th>
-					<th width="130px">Текст в поле</th>
-					<th width="35px">Clear<img class="help_tip" data-tip="Указывает на то, что следующее поле за текущим, будет начинаться с новой строки." src="<?php bloginfo('wpurl');?>/wp-content/plugins/woocommerce/assets/images/help.png" /> </th>
-					<th width="130px">Класс поля<img class="help_tip" data-tip="<h3 style='margin:0;padding:0'>Задает стиль текущего поля</h3><ul style='text-align: left;'><li><span style='color: #000'>form-row-first</span>&nbsp;&ndash;&nbsp;первый в строке;</li><li><span style='color: #000'>form-row-last</span>&nbsp;&ndash;&nbsp;последний в строке.</li></ul><hr /><span style='color: #000'>ЕСЛИ ОСТАВИТЬ ПУСТЫМ</span>, то поле будет отображаться на всю ширину. Соответственно, в предыдущем поле (которое выше) нужно отметить &laquo;Clear&raquo;." src="<?php bloginfo('wpurl');?>/wp-content/plugins/woocommerce/assets/images/help.png" /></th>
-				<th  width="40px">Тип поля</th>
-				<th  width="40px">Обя&shy;за&shy;те&shy;ль&shy;ное</th>
-				
-				<th  width="40px">Опу&shy;бли&shy;ко&shy;вать</th>
-				<th  width="120px">Метод оплаты</th>
-				<th  width="120px">Метод доставки</th>
-				<th width="65px">Удалить/До&shy;ба&shy;вить</th>
-			</tr>
-		</thead>
-		<tfoot>
-			<tr>
-				<th>Название</th>
-				<th>Заголовок</th>
-				<th>Текст в поле</th>
-				<th width="35px">Clear<img class="help_tip" data-tip="Указывает на то, что следующее поле за текущим, будет начинаться с новой строки." src="<?php  bloginfo('wpurl');?>/wp-content/plugins/woocommerce/assets/images/help.png" /> </th>
-				<th>Класс поля</th>
-				<th  width="40px">Тип поля</th>
-				<th  width="40px">Обя&shy;за&shy;те&shy;ль&shy;ное</th>
-
-				<th  width="40px">Опу&shy;бли&shy;ко&shy;вать</th>
-				<th  width="120px">Метод оплаты</th>
-				<th  width="120px">Метод доставки</th>
-				<th>Удалить/До&shy;ба&shy;вить</th>
-				</tr>
-			</tfoot>
-			<tbody id="the-list" class="myTable">
-				<?php 
-
-				$count = 0;
-
-				$checkout_fields = get_option('woocommerce_saphali_filds');
-				
-				if( isset($checkout_fields["billing"]) && is_array($checkout_fields["billing"])) $global_f_checkout_fields["billing"] = $checkout_fields["billing"];
-				if( isset($f) )
-				foreach($global_f_checkout_fields["billing"] as $key => $value) {	
-				
-					$public = 'public';
-					if( !version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) {
-						if( isset( $checkout_fields["billing"][$key][$public] ) ) $value[$public] = $checkout_fields["billing"][$key][$public];
-						elseif( isset( $checkout_fields["billing"][$key] ) ) {
-							$value[$public] = '';
-						}
-					}
-					if(isset($checkout_fields["billing"][$key]['payment_method'])) {
-						$pm_k_remove = array();
-						if(is_array($checkout_fields["billing"][$key]['payment_method']))
-						foreach($checkout_fields["billing"][$key]['payment_method'] as $k => $v) {
-							if($v === '0') {
-								$pm_k_remove[] = $k;
-							}
-						} elseif($checkout_fields["billing"][$key]['payment_method'] === '0') {
-							// $pm_k_remove[] = $k;
-							unset($checkout_fields["billing"][$key]['payment_method']);
-						}
-
-						foreach($pm_k_remove as $k_remove) {
-							unset($checkout_fields["billing"][$key]['payment_method'][$k_remove]);
-						}
-						if( isset( $checkout_fields["billing"][$key]['payment_method'] ) ) $value['payment_method'] = $checkout_fields["billing"][$key]['payment_method'];
-					}
-					if(isset($checkout_fields["billing"][$key]['shipping_method'])) {
-						$pm_k_remove = array();
-						if(is_array($checkout_fields["billing"][$key]['shipping_method']))
-						foreach($checkout_fields["billing"][$key]['shipping_method'] as $k => $v) {
-							if($v === '0') {
-								$pm_k_remove[] = $k;
-							}
-						} elseif($checkout_fields["billing"][$key]['shipping_method'] === '0') {
-							// $pm_k_remove[] = $k;
-							unset($checkout_fields["billing"][$key]['shipping_method']);
-						}
-						
-						foreach($pm_k_remove as $k_remove) {
-							unset($checkout_fields["billing"][$key]['shipping_method'][$k_remove]);
-						}
-						if( isset( $checkout_fields["billing"][$key]['shipping_method'] ) ) $value['shipping_method'] = $checkout_fields["billing"][$key]['shipping_method'];
-					}
-					
-					if(empty($value[$public]) && 
-						(isset($checkout_fields["billing"]) && !is_array($checkout_fields["billing"]) || !isset($checkout_fields["billing"]))) 
-						$value[$public] = true;
-					?>
-					<tr>
-						<td> <input  disabled value='<?php echo $key?>' type="text" name="billing[<?php echo $key?>][name]" /></td>
-						<td><input value='<?php echo $value['label']?>' type="text" name="billing[<?php echo $key?>][label]" /></td>
-					<td<?php if(isset($value['type']) && ($value['type'] == 'select' || $value['type'] == 'radio') ) {
-						echo ' class="option-area"';}  ?>><?php if(!isset($value['type']) || isset($value['type']) && $value['type'] != 'select' && $value['type'] != 'radio') { ?><input value='<?php if(isset( $value['placeholder'] )) echo $value['placeholder']; ?>' type="text" name="billing[<?php  echo $key?>][placeholder]" /><?php } else { 
-							if( isset($value['options']) && is_array($value['options']) ) {
-								foreach($value['options'] as $key_option => $val_option) {?>
-								<span><input class="options" type="text" name="billing[<?php echo $key?>][options][<?php echo $key_option; ?>]" value="<?php echo $val_option?>" /> <span class="delete-option" style="cursor:pointer;border:1px solid">Удалить</span></span><br />
-								
-							<?php } ?>
-							<div class="button add_option" rel="<?php echo $key; ?>">Добавить еще</div>
-							<?php
-							}
-					
-					} ?></td>
-						<td><input <?php if(isset($value['clear']) && $value['clear']) echo 'checked'?>  class="<?php echo isset($value['clear']) ? $value['clear'] : '' ;?>" type="checkbox" name="billing[<?php echo $key?>][clear]" /></td>
-						<td><?php  if(isset($value['class']) && is_array($value['class'])) { foreach($value['class'] as $v_class) { ?>
-						<input value='<?php echo $v_class;?>' type="text" name="billing[<?php echo $key?>][class][]" /> <?php } } else { ?>
-						<input value='' type="text" name="billing[<?php echo $key?>][class][]" /> <?php
-						} ?></td>
-					<td>
-					Select <input <?php  if(isset($value['type']) && $value['type'] == 'select') echo 'checked'?> type="radio" name="billing[<?php  echo $key?>][type]" value="select" /><br />
-					Radio <input <?php  if(isset($value['type']) && $value['type'] == 'radio') echo 'checked'?> type="radio" name="billing[<?php  echo $key?>][type]" value="radio" /><br />
-					Checkbox <input <?php  if(isset($value['type']) && $value['type'] == 'checkbox') echo 'checked'?> type="radio" name="billing[<?php  echo $key?>][type]" value="checkbox"  /><br />
-					Textarea <input <?php  if(isset($value['type']) && $value['type'] == 'textarea') echo 'checked'?> type="radio" name="billing[<?php  echo $key?>][type]" value="textarea"  /><br />
-					<?php echo (!isset($value['type']) || $value['type'] == 'select'|| $value['type'] == 'checkbox'|| $value['type'] == 'textarea') ? 'Text' : $value['type']; ?> <input <?php  if(isset($value['type']) && $value['type'] == $value['type'] && !in_array( $value['type'], array('select', 'radio', 'textarea', 'checkbox') ) ) echo 'checked'?> type="radio" name="billing[<?php  echo $key?>][type]" value="<?php if( isset($value['type']) && !in_array( $value['type'], array('select', 'radio', 'textarea', 'checkbox') ) ) echo $value['type']; ?>"  />
-					</td>
-						<td><input <?php if( isset($value['required'] ) && $value['required']) echo 'checked'?> type="checkbox" name="billing[<?php echo $key?>][required]" /></td>
-						<td><input <?php if(isset($value[$public]) && $value[$public]) echo 'checked';?> type="checkbox" name="billing[<?php echo $key?>][<?php echo $public; ?>]" /></td>
-						<td>
-
-						<select multiple="multiple" width="120px" name="billing[<?php echo $key?>][payment_method][]">
-							<option value="0"<?php if( isset($value['payment_method']) && ( 
-								is_array($value['payment_method']) && in_array('0', (array)$value['payment_method']) || 
-								empty($value['payment_method']) ) || 
-								!isset($value['payment_method']) ) 
-								echo 'selected';?>>Все</option>
-							<?php 
-								foreach ( $woocommerce->payment_gateways->payment_gateways() as $gateway ) {
-									if ( $gateway->enabled != 'yes' ) continue;
-									?><option value="<?php echo $gateway->id; ?>" <?php if(isset($value['payment_method']) && is_array($value['payment_method']) && in_array($gateway->id, (array)$value['payment_method']) ) echo 'selected';?>><?php echo $gateway->title; ?></option><?php
-								} 
-							?>
-						</select>
-						</td>
-						<td>
-						<select multiple="multiple" width="120px" name="billing[<?php echo $key?>][shipping_method][]">
-							<option value="0"<?php if( isset($value['shipping_method']) && ( is_array($value['shipping_method']) && in_array('0', (array)$value['shipping_method']) || empty($value['shipping_method']) ) || !isset($value['shipping_method']) ) echo 'selected';?>>Все</option>
-							<?php
-								$no_add_option = true;
-								foreach ( $woocommerce->shipping->get_shipping_methods() as $act_id => $shipping ) {
-									if ( $shipping->enabled == 'no' ) continue;
-									if( in_array($act_id, (array)$value['shipping_method']) ) $no_add_option = false;
-									?><option value="<?php echo $act_id; ?>" <?php if(isset($value['shipping_method']) && is_array($value['shipping_method']) && in_array($act_id, (array)$value['shipping_method']) ) echo 'selected';?>><?php echo $shipping->title ? $shipping->title: $shipping->method_title; ?></option><?php
-								}
-								if($no_add_option && !empty($value['shipping_method'])) {
-									$value_shipping_method = is_array($value['shipping_method']) ? $value['shipping_method'][0] : $value['shipping_method'];
-									?><option value="<?php echo $value_shipping_method; ?>" <?php echo 'selected';?>><?php echo $value_shipping_method; ?></option><?php
-								}
-							?>
-						</select>
-						</td>
-						<td><input rel="sort_order" id="order_count" type="hidden" name="billing[<?php echo $key?>][order]" value="<?php echo $count?>" />
-						<input type="button" class="button" id="billing_delete" value="Удалить -"/></td>
-					</tr>
-					<?php $count++;
-				}
-				?>
-				<tr  class="nodrop nodrag">
-						<td></td>
-						<td></td>
-						<td></td>
-						<td></td>
-						<td></td>
-						<td></td>
-
-						<td></td>
-						<td></td>
-						
-						<td colspan="2"><input type="button" class="button"  id="billing" value="Добавить +"/></td>
-				</tr>
-			</tbody>
-			</table>
-				
-			<h2 align="center">Реквизиты доставки</h2>
-			<table class="wp-list-table widefat fixed posts" cellspacing="0">
-			<thead>
-				<tr>
-					<th width="130px">Название<img class="help_tip" data-tip="Название поля должно быть уни&shy;ка&shy;ль&shy;ным (не должно повторяться)." src="<?php bloginfo('wpurl');?>/wp-content/plugins/woocommerce/assets/images/help.png" /></th>
-					<th width="130px">Заголовок</th>
-					<th width="130px">Текст в поле</th>
-					<th width="35px">Clear<img class="help_tip" data-tip="Указывает на то, что следующее поле за текущим, будет начинаться с новой строки." src="<?php bloginfo('wpurl');?>/wp-content/plugins/woocommerce/assets/images/help.png" /> </th>
-					<th width="130px">Класс поля<img class="help_tip" data-tip="<h3 style='margin:0;padding:0'>Задает стиль текущего поля</h3><ul style='text-align: left;'><li><span style='color: #000'>form-row-first</span>&nbsp;&ndash;&nbsp;первый в строке;</li><li><span style='color: #000'>form-row-last</span>&nbsp;&ndash;&nbsp;последний в строке.</li></ul><hr /><span style='color: #000'>ЕСЛИ ОСТАВИТЬ ПУСТЫМ</span>, то поле будет отображаться на всю ширину. Соответственно, в предыдущем поле (которое выше) нужно отметить &laquo;Clear&raquo;." src="<?php bloginfo('wpurl');?>/wp-content/plugins/woocommerce/assets/images/help.png" /></th>
-					<th  width="40px">Обя&shy;за&shy;те&shy;ль&shy;ное</th>
-
-					<th  width="40px">Опу&shy;бли&shy;ко&shy;вать</th>
-					<th  width="120px">Метод оплаты</th>
-					<th  width="120px">Метод доставки</th>
-					<th width="65px">Удалить/До&shy;ба&shy;вить</th>
-				</tr>
-			</thead>
-			<tfoot>
-				<tr>
-					<th>Название</th>
-					<th>Заголовок</th>
-					<th>Текст в поле</th>
-					<th width="56px">Clear<img class="help_tip" data-tip="Указывает на то, что следующее поле за текущим, будет начинаться с новой строки." src="<?php bloginfo('wpurl');?>/wp-content/plugins/woocommerce/assets/images/help.png" /> </th>
-					<th>Класс поля</th>
-					<th  width="40px">Обя&shy;за&shy;те&shy;ль&shy;ное</th>
-
-					<th  width="40px">Опу&shy;бли&shy;ко&shy;вать</th>
-					<th  width="120px">Метод оплаты</th>
-					<th  width="120px">Метод доставки</th>
-					<th>Удалить/До&shy;ба&shy;вить</th>
-				</tr>
-			</tfoot>
-			<tbody id="the-list" class="myTable">
-				<?php $count = 0; 
-				if(isset($checkout_fields["shipping"]) && is_array($checkout_fields["shipping"])) $global_f_checkout_fields["shipping"] = $checkout_fields["shipping"];
-				if( isset( $global_f_checkout_fields["shipping"] ) )
-				foreach($global_f_checkout_fields["shipping"] as $key => $value) {	
-					$public = 'public';
-					if( ! version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) {
-						if( isset( $checkout_fields["shipping"][$key] ) && isset( $checkout_fields["shipping"][$key][$public] ) ) 
-							$value[$public] = $checkout_fields["shipping"][$key][$public];
-					}
-					if(isset($checkout_fields["shipping"][$key]['payment_method'])) {
-						$pm_k_remove = array();
-						if(is_array($checkout_fields["shipping"][$key]['payment_method']))
-						foreach($checkout_fields["shipping"][$key]['payment_method'] as $k => $v) {
-							if($v === '0') {
-								$pm_k_remove[] = $k;
-							}
-						} elseif($checkout_fields["shipping"][$key]['payment_method']=== '0') {
-							unset($checkout_fields["shipping"][$key]['payment_method']);
-						}
-						
-						foreach($pm_k_remove as $k_remove) {
-							unset($checkout_fields["shipping"][$key]['payment_method'][$k_remove]);
-						}
-						if( isset( $checkout_fields["shipping"][$key] ) ) $value['payment_method'] = $checkout_fields["shipping"][$key]['payment_method'];
-					}
-					if(isset($checkout_fields["shipping"][$key]['shipping_method'])) {
-						$pm_k_remove = array();
-						if(is_array($checkout_fields["shipping"][$key]['shipping_method']))
-						foreach($checkout_fields["shipping"][$key]['shipping_method'] as $k => $v) {
-							if($v === '0') {
-								$pm_k_remove[] = $k;
-							}
-						} elseif($checkout_fields["shipping"][$key]['shipping_method'] === '0') {
-							unset($checkout_fields["shipping"][$key]['shipping_method']);
-						}
-						
-						foreach($pm_k_remove as $k_remove) {
-							unset($checkout_fields["shipping"][$key]['shipping_method'][$k_remove]);
-						}
-						if( isset( $checkout_fields["shipping"][$key] ) ) $value['shipping_method'] = $checkout_fields["shipping"][$key]['shipping_method'];
-					}
-				if( empty($value['public']) && (isset($checkout_fields["shipping"]) && !is_array($checkout_fields["shipping"]) || !isset($checkout_fields["shipping"]))  ) $value['public'] = true;
-					?>
-					<tr>
-						<td><input  disabled  value=<?php echo $key?> type="text" name="shipping[<?php echo $key?>][name]" /></td>
-						<td><input value='<?php echo isset($value['label']) ? $value['label']: ''; ?>' type="text" name="shipping[<?php echo $key?>][label]" /><input value='<?php echo isset($value['type']) ? $value['type']: '' ?>' type="hidden" name="shipping[<?php echo $key?>][type]" /></td>
-						<td><input value='<?php if(isset( $value['placeholder'] )) echo $value['placeholder']; ?>' type="text" name="shipping[<?php echo $key?>][placeholder]" /></td>
-						<td><input <?php if(isset($value['clear']) && $value['clear']) echo 'checked'?> class="<?php echo isset($value['clear'])? $value['clear'] : ''; ?>" type="checkbox" name="shipping[<?php echo $key?>][clear]" /></td>
-						<td><?php  if( isset($value['class']) && is_array($value['class']) ) { foreach($value['class'] as $v_class) { ?>
-						
-						<input value='<?php echo $v_class;?>' type="text" name="shipping[<?php echo $key?>][class][]" /> <?php } } else { ?>
-						<input value='' type="text" name="shipping[<?php echo $key?>][class][]" /> <?php
-						} ?></td>
-						<td><input <?php if(isset($value['required']) && $value['required']) echo 'checked'?> type="checkbox" name="shipping[<?php echo $key?>][required]" /></td>
-						<td><input <?php if(isset($value['public']) && $value['public']) echo 'checked';?> type="checkbox" name="shipping[<?php echo $key?>][public]" /></td>
-						<td>
-						<select multiple="multiple" width="120px" name="shipping[<?php echo $key?>][payment_method][]">
-							<option value="0" <?php if( isset($value['payment_method']) && ( in_array('0', (array)$value['payment_method']) || empty($value['payment_method']) ) || !isset($value['payment_method']) ) echo 'selected';?>>Все</option>
-							<?php 
-								foreach ( $woocommerce->payment_gateways->payment_gateways() as $gateway ) {
-									if ( $gateway->enabled != 'yes' ) continue;
-									?><option value="<?php echo $gateway->id; ?>" <?php if(isset($value['payment_method']) && in_array($gateway->id, (array)$value['payment_method']) ) echo 'selected';?>><?php echo $gateway->title; ?></option><?php
-								} 
-							?>
-						</select>
-						</td><td>
-						<select multiple="multiple" width="120px" name="shipping[<?php echo $key?>][shipping_method][]">
-							<option value="0" <?php if( isset($value['shipping_method']) && ( in_array('0', (array)$value['shipping_method']) || empty($value['shipping_method']) ) || !isset($value['shipping_method']) ) echo 'selected';?>>Все</option>
-							<?php 
-								foreach ( $woocommerce->shipping->get_shipping_methods() as $act_id => $shipping ) {
-									if ( $shipping->enabled == 'no' ) continue;
-									?><option value="<?php echo $act_id; ?>" <?php if(isset($value['shipping_method']) && in_array($act_id, (array)$value['shipping_method']) ) echo 'selected';?>><?php echo $shipping->title ? $shipping->title: $shipping->method_title; ?></option><?php
-								} 
-							?>
-						</select>
-						</td>
-						
-						<td><input rel="sort_order"  id="order_count" type="hidden" name="shipping[<?php echo $key?>][order]" value="<?php echo $count?>" /><input type="button" class="button" id="billing_delete" value="Удалить -"/>
-							<?php 
-							if( isset($value['options']) && is_array($value['options']) ) {
-								foreach($value['options'] as  $key_option => $val_option) {?>
-								<input class="options" type="hidden" name="shipping[<?php echo $key?>][options][<?php echo $key_option; ?>]" value="<?php echo $val_option?>" />
-							<?php }
-							} ?>
-						</td>
-					</tr>
-					<?php $count++;
-				}
-				?>
-				<tr  class="nodrop nodrag">
-						<td></td>
-						<td></td>
-						<td></td>
-						<td></td>
-		
-						<td></td>
-						<td></td>
-						<td></td>
-						<td colspan="2"><input type="button" class="button" id="shipping" value="Добавить +"/></td>
-				</tr>
+        // Проверяем, есть ли блоки WooCommerce
+        if ( function_exists( 'has_blocks' ) && has_blocks( $checkout_page_id ) ) {
+            $blocks = parse_blocks( $checkout_page_content );
 			
-			</tbody>
-			</table>		
-		<br />
-		<h2 align="center">Дополнительные поля</h2>
-			<table class="wp-list-table widefat fixed posts" cellspacing="0">
-			<thead>
-				<tr>
-					<th width="130px">Название<img class="help_tip" data-tip="Название поля должно быть уни&shy;ка&shy;ль&shy;ным (не должно повторяться)." src="<?php bloginfo('wpurl');?>/wp-content/plugins/woocommerce/assets/images/help.png" /></th>
-					<th width="130px">Заголовок</th>
-					<th width="130px">Текст в поле</th>
-					<th width="130px">Класс поля</th>
-					<th width="130px">Тип поля</th>
-					<th  width="40px">Опу&shy;бли&shy;ко&shy;вать</th>
-					<th width="65px">Удалить/До&shy;ба&shy;вить</th>
-				</tr>
-			</thead>
-			<tfoot>
-				<tr>
-					<th>Название</th>
-					<th>Заголовок</th>
-					<th>Текст в поле</th>
-					<th>Класс поля</th>
-					<th>Тип поля</th>
-					<th  width="40px">Опу&shy;бли&shy;ко&shy;вать</th>
-					<th>Удалить/До&shy;ба&shy;вить</th>
-				</tr>
-			</tfoot>
-			<tbody id="the-list" class="myTable">
-				<?php $count = 0;
-				if(isset($checkout_fields["order"]) && is_array($checkout_fields["order"])) $global_f_checkout_fields["order"] = $checkout_fields["order"];
-				if(isset($global_f_checkout_fields["order"]) )
-				foreach($global_f_checkout_fields["order"] as $key => $value) {
-					$public = 'public';
-					if( ! version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) {
-						if( isset( $checkout_fields["order"][$key] ) ) $value[$public] = $checkout_fields["order"][$key][$public];
-					}
-					if(empty($value['public']) && (isset($checkout_fields["order"]) && !is_array($checkout_fields["order"]) || !isset($checkout_fields["order"]))) $value['public'] = true;
-					?>
-					<tr>
-						<td><input disabled value=<?php echo $key?> type="text" name="order[<?php echo $key?>][name]" /></td>
-						<td><input value='<?php echo $value['label']?>' type="text" name="order[<?php echo $key?>][label]" /></td>
-						<td><input value='<?php echo $value['placeholder']?>' type="text" name="order[<?php echo $key?>][placeholder]" /></td>
-						
-						<td><?php  if(isset($value['class']) && is_array($value['class'])) { foreach($value['class'] as $v_class) { ?>
-						
-						<input value='<?php echo $v_class;?>' type="text" name="order[<?php echo $key?>][class][]" /> <?php } } else { ?>
-						<input value='' type="text" name="order[<?php echo $key?>][class][]" /> <?php
-						} ?></td>
-						<td><input value='<?php echo $value['type']?>' type="text" name="order[<?php echo $key?>][type]" /></td>
-						<td><input <?php if($value['public']) echo 'checked';?> type="checkbox" name="order[<?php echo $key?>][public]" /></td>
-						
-						<td><input id="order_count" rel="sort_order" type="hidden" name="order[<?php echo $key?>][order]" value="<?php echo $count?>" /><input type="button" class="button" id="billing_delete" value="Удалить -"/>
-							<?php 
-							if( isset($value['options']) && is_array($value['options']) ) {
-								foreach($value['options'] as $key_option => $val_option) {?>
-								<input class="options" type="hidden" name="order[<?php echo $key?>][options][<?php echo $key_option; ?>]" value="<?php echo $val_option?>" />
-							<?php }
-							} ?>
-						</td>
-					</tr>
-					<?php $count++;
-				}
-				?>
-				<tr  class="nodrop nodrag">
-					<td></td>
-					<td></td>
-					<td></td>
-					<td></td>
-					<td></td>
-					<td></td>
-
-					
-					<td><input type="button" class="button" id="order" value="Добавить +"/></td>
-				</tr>
-			</tbody>
-			</table><br />
-			<input type="submit" class="button alignleft" value="<?php _e('Save') ?>"/>
-			</form>
-			<form action="" method="post">
-				<input type="hidden" name="_wpnonce" value="<?php echo wp_create_nonce('fields-nonce'); ?>">
-				<input type="hidden" name="reset" value="All"/>
-				<input type="submit" class="button alignright" value="Восстановить поля по умолчанию"/>
-			</form>
-			<style type="text/css">
-			#tiptip_content{font-size:11px;color:#fff;padding:4px 8px;background:#a2678c;border-radius:3px;-webkit-border-radius:3px;-moz-border-radius:3px;box-shadow:1px 1px 3px rgba(0,0,0,0.1);-webkit-box-shadow:1px 1px 3px rgba(0,0,0,0.1);-moz-box-shadow:1px 1px 3px rgba(0,0,0,0.1);text-align:center}#tiptip_content code{background:#855c76;padding:1px}#tiptip_arrow,#tiptip_arrow_inner{position:absolute;border-color:transparent;border-style:solid;border-width:6px;height:0;width:0}#tiptip_holder.tip_top #tiptip_arrow_inner{margin-top:-7px;margin-left:-6px;border-top-color:#a2678c}#tiptip_holder.tip_bottom #tiptip_arrow_inner{margin-top:-5px;margin-left:-6px;border-bottom-color:#a2678c}#tiptip_holder.tip_right #tiptip_arrow_inner{margin-top:-6px;margin-left:-5px;border-right-color:#a2678c}#tiptip_holder.tip_left #tiptip_arrow_inner{margin-top:-6px;margin-left:-7px;border-left-color:#a2678c}img.help_tip{vertical-align:middle;margin:0 0 0 3px}#tiptip_holder{display:none;position:absolute;top:0;left:0;z-index:99999}#tiptip_holder.tip_top{padding-bottom:5px}#tiptip_holder.tip_bottom{padding-top:5px}#tiptip_holder.tip_right{padding-left:5px}#tiptip_holder.tip_left{padding-right:5px}#tiptip_content{font-size:11px;color:#fff;padding:4px 8px;background:#a2678c;border-radius:3px;-webkit-border-radius:3px;-moz-border-radius:3px;box-shadow:1px 1px 3px rgba(0,0,0,0.1);-webkit-box-shadow:1px 1px 3px rgba(0,0,0,0.1);-moz-box-shadow:1px 1px 3px rgba(0,0,0,0.1);text-align:center}#tiptip_content code{background:#855c76;padding:1px}#tiptip_arrow,#tiptip_arrow_inner{position:absolute;border-color:transparent;border-style:solid;border-width:6px;height:0;width:0}#tiptip_holder.tip_top #tiptip_arrow_inner{margin-top:-7px;margin-left:-6px;border-top-color:#a2678c}#tiptip_holder.tip_bottom #tiptip_arrow_inner{margin-top:-5px;margin-left:-6px;border-bottom-color:#a2678c}#tiptip_holder.tip_right #tiptip_arrow_inner{margin-top:-6px;margin-left:-5px;border-right-color:#a2678c}#tiptip_holder.tip_left #tiptip_arrow_inner{margin-top:-6px;margin-left:-7px;border-left-color:#a2678c}
-			input[disabled="disabled"], input[disabled=""] {
-				background:none repeat scroll 0 0 #EAEAEA !important;
-				color:#636060 !important;
+			if ( $this->find_checkout_block( $blocks ) ) {
+				$this->checkout_type = 'block';
+				return $this->checkout_type;
 			}
-			#the-list select { width: 120px; }
-			</style>
-			<script type="text/javascript">
-			(function($){$.fn.tipTip=function(options){var defaults={activation:"hover",keepAlive:false,maxWidth:"200px",edgeOffset:3,defaultPosition:"bottom",delay:400,fadeIn:200,fadeOut:200,attribute:"title",content:false,enter:function(){},exit:function(){}};var opts=$.extend(defaults,options);if($("#tiptip_holder").length<=0){var tiptip_holder=$('<div id="tiptip_holder" style="max-width:'+opts.maxWidth+';"></div>');var tiptip_content=$('<div id="tiptip_content"></div>');var tiptip_arrow=$('<div id="tiptip_arrow"></div>');$("body").append(tiptip_holder.html(tiptip_content).prepend(tiptip_arrow.html('<div id="tiptip_arrow_inner"></div>')))}else{var tiptip_holder=$("#tiptip_holder");var tiptip_content=$("#tiptip_content");var tiptip_arrow=$("#tiptip_arrow")}return this.each(function(){var org_elem=$(this);if(opts.content){var org_title=opts.content}else{var org_title=org_elem.attr(opts.attribute)}if(org_title!=""){if(!opts.content){org_elem.removeAttr(opts.attribute)}var timeout=false;if(opts.activation=="hover"){org_elem.hover(function(){active_tiptip()},function(){if(!opts.keepAlive){deactive_tiptip()}});if(opts.keepAlive){tiptip_holder.hover(function(){},function(){deactive_tiptip()})}}else if(opts.activation=="focus"){org_elem.focus(function(){active_tiptip()}).blur(function(){deactive_tiptip()})}else if(opts.activation=="click"){org_elem.click(function(){active_tiptip();return false}).hover(function(){},function(){if(!opts.keepAlive){deactive_tiptip()}});if(opts.keepAlive){tiptip_holder.hover(function(){},function(){deactive_tiptip()})}}function active_tiptip(){opts.enter.call(this);tiptip_content.html(org_title);tiptip_holder.hide().removeAttr("class").css("margin","0");tiptip_arrow.removeAttr("style");var top=parseInt(org_elem.offset()['top']);var left=parseInt(org_elem.offset()['left']);var org_width=parseInt(org_elem.outerWidth());var org_height=parseInt(org_elem.outerHeight());var tip_w=tiptip_holder.outerWidth();var tip_h=tiptip_holder.outerHeight();var w_compare=Math.round((org_width-tip_w)/2);var h_compare=Math.round((org_height-tip_h)/2);var marg_left=Math.round(left+w_compare);var marg_top=Math.round(top+org_height+opts.edgeOffset);var t_class="";var arrow_top="";var arrow_left=Math.round(tip_w-12)/2;if(opts.defaultPosition=="bottom"){t_class="_bottom"}else if(opts.defaultPosition=="top"){t_class="_top"}else if(opts.defaultPosition=="left"){t_class="_left"}else if(opts.defaultPosition=="right"){t_class="_right"}var right_compare=(w_compare+left)<parseInt($(window).scrollLeft());var left_compare=(tip_w+left)>parseInt($(window).width());if((right_compare&&w_compare<0)||(t_class=="_right"&&!left_compare)||(t_class=="_left"&&left<(tip_w+opts.edgeOffset+5))){t_class="_right";arrow_top=Math.round(tip_h-13)/2;arrow_left=-12;marg_left=Math.round(left+org_width+opts.edgeOffset);marg_top=Math.round(top+h_compare)}else if((left_compare&&w_compare<0)||(t_class=="_left"&&!right_compare)){t_class="_left";arrow_top=Math.round(tip_h-13)/2;arrow_left=Math.round(tip_w);marg_left=Math.round(left-(tip_w+opts.edgeOffset+5));marg_top=Math.round(top+h_compare)}var top_compare=(top+org_height+opts.edgeOffset+tip_h+8)>parseInt($(window).height()+$(window).scrollTop());var bottom_compare=((top+org_height)-(opts.edgeOffset+tip_h+8))<0;if(top_compare||(t_class=="_bottom"&&top_compare)||(t_class=="_top"&&!bottom_compare)){if(t_class=="_top"||t_class=="_bottom"){t_class="_top"}else{t_class=t_class+"_top"}arrow_top=tip_h;marg_top=Math.round(top-(tip_h+5+opts.edgeOffset))}else if(bottom_compare|(t_class=="_top"&&bottom_compare)||(t_class=="_bottom"&&!top_compare)){if(t_class=="_top"||t_class=="_bottom"){t_class="_bottom"}else{t_class=t_class+"_bottom"}arrow_top=-12;marg_top=Math.round(top+org_height+opts.edgeOffset)}if(t_class=="_right_top"||t_class=="_left_top"){marg_top=marg_top+5}else if(t_class=="_right_bottom"||t_class=="_left_bottom"){marg_top=marg_top-5}if(t_class=="_left_top"||t_class=="_left_bottom"){marg_left=marg_left+5}tiptip_arrow.css({"margin-left":arrow_left+"px","margin-top":arrow_top+"px"});tiptip_holder.css({"margin-left":marg_left+"px","margin-top":marg_top+"px"}).attr("class","tip"+t_class);if(timeout){clearTimeout(timeout)}timeout=setTimeout(function(){tiptip_holder.stop(true,true).fadeIn(opts.fadeIn)},opts.delay)}function deactive_tiptip(){opts.exit.call(this);if(timeout){clearTimeout(timeout)}tiptip_holder.fadeOut(opts.fadeOut)}}})}})(jQuery);
-			jQuery(".tips, .help_tip").tipTip({
-				'attribute' : 'data-tip',
-				'fadeIn' : 50,
-				'fadeOut' : 50,
-				'delay' : 200
-			});
-			jQuery('input[value="billing_booking_delivery_t"]').parent().parent().hide();
-		jQuery("body").delegate('.delete-option', 'click',function() {
-			jQuery(this).parent().remove();
-		});
-		jQuery("body").delegate('.button.add_option', 'click',function() {
-			jQuery(this).before(' <span><br /><input type="text" class="options" value="" name="billing['+jQuery(this).attr('rel')+'][options][option-'+ (jQuery(this).parent().find('input').length + 1) +']"/><span class="delete-option" style="cursor:pointer;border:1px solid">Удалить</span></span>');
-		});
-		jQuery("body").delegate('input[type="radio"]', 'click',function() {
-			if( jQuery(this).val() == 'select' || jQuery(this).val() == 'radio') {
-				if (typeof jQuery(this).closest('tr').find('td:first input') != 'undefined' && jQuery(this).closest('tr').find('td:first input').attr('disabled') == "disabled") {} else {
-					var obj = jQuery(this).parent().parent();
-					obj.find('td').css('border-bottom', 'none');
-					
-
-					var indx = obj.attr('class').split(' ')[0].replace('parrent_td_option','');
-					if(!obj.parent().find('tr.tr_td_option' + indx).length) {
-						obj.addClass('parrent_td_option'+jQuery('.button.add_option').length);
-						var firstInput = obj.find('td:first input');
-						if('billing[new_fild][name][]' != firstInput.attr('name') )
-						obj.after('<tr style="border-top:0" class="tr_td_option'+jQuery('.button.add_option').length +'" ><td  style="border-top:0;padding-left: 72%;" colspan="9"> <span><input class="options" type="text" value="" name="billing['+firstInput.val()+'][options][option-1]"/><span class="delete-option" style="cursor:pointer;border:1px solid">Удалить</span></span> <div class="button add_option" rel="'+firstInput.val()+'">Добавить еще</div></td></tr>');
-						else obj.after('<tr style="border-top:0" class="tr_td_option'+jQuery('.button.add_option').length +'" ><td  style="border-top:0;padding-left: 72%;" colspan="9"> <span><input class="options" type="text" value="" name="billing[new_fild][options][option-1]"/><span class="delete-option" style="cursor:pointer;border:1px solid">Удалить</span></span> <div class="button add_option" rel="new_fild">Добавить еще</div></td></tr>');	
-					}
-				}
-			} else {
-				var obj = jQuery(this).parent().parent();
-				if(obj.find('td').attr('style') != '') {
-					obj.find('td').attr('style', '');
-					var text = obj.attr('class');//parrent_td_option
-					if (typeof text != 'undefined') {
-						text = text.replace(/parrent_td_option/g, '');
-						jQuery('tr.tr_td_option' + text).remove();
-						obj.attr('class', '');
-					}
+        }
+		$this->checkout_type = 'unknown';
+        return $this->checkout_type;
+    }
+	function find_checkout_block($blocks) {
+		if ( ! is_array( $blocks ) ) {
+			return false;
+		}
+	
+		foreach ( $blocks as $block ) {
+			// Проверяем, существует ли ключ 'blockName' и содержит ли он нужную подстроку.
+			if ( isset( $block['blockName'] ) && strpos( $block['blockName'], 'woocommerce/checkout' ) !== false ) {
+				return true;
+			}
+			// Если в блоке есть вложенные блоки, рекурсивно ищем среди них.
+			if ( isset( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) && ! empty( $block['innerBlocks'] ) ) {
+				if ( $this->find_checkout_block( $block['innerBlocks'] ) ) {
+					return true;
 				}
 			}
-		});
-		
-		jQuery("body").delegate('input.options', 'blur', function() {
-			var text = jQuery(this).attr('name');
-			var class_tr = jQuery(this).closest('tr').attr('class').replace('tr_td_', 'parrent_td_');
-			text = text.replace(/\[options\]\[(.*)\]/g, '[options][' + (parseInt(jQuery('.' + class_tr + ' td input#order_count').val(), 10) - jQuery('input[name="billing[new_fild][name][]"]').length) + '][' + jQuery(this).val() + ']');
-			jQuery(this).attr('name', text);
-		});
-		var fild_pm;
-			jQuery("body").delegate('.button#billing','click',function() {
-				var obj = jQuery(this).parent().parent();
-				fild_pm = '<td>\
-						<select multiple="multiple" width="120px" name="billing[new_fild][payment_method][]">\
-							<option selected value="0">Все</option>\
-							<?php 
-								foreach ( $woocommerce->payment_gateways->payment_gateways() as $gateway ) {
-									if ( $gateway->enabled != 'yes' ) continue;
-									?><option value="<?php echo $gateway->id; ?>" <?php if(isset($value['payment_method']) && in_array($gateway->id, (array)$value['payment_method']) ) echo 'selected';?>><?php echo str_replace("'", "\\'", $gateway->title); ?></option><?php
-								} 
-							?>\
-						</select>\
-						</td>' + '<td>\
-						<select multiple="multiple" width="120px" name="billing[new_fild][shipping_method][]">\
-							<option selected value="0">Все</option>\
-							<?php 
-								foreach ( $woocommerce->shipping->get_shipping_methods() as $act_id => $shipping ) {
-									if ( $shipping->enabled == 'no' ) continue;
-									?><option value="<?php echo $act_id; ?>" <?php if(isset($value['shipping_method']) && in_array($act_id, (array)$value['shipping_method']) ) echo 'selected';?>><?php $st = $shipping->title ? $shipping->title: $shipping->method_title; echo str_replace("'", "\\'", $st); ?></option><?php
-								} 
-							?>\
-						</select>\
-						</td>';
-			var counter = obj.parent().find('tr td input#order_count:last').length ? obj.parent().find('tr td input#order_count:last').val() : 0;
-			obj.html('<td><input value="billing_new_fild'+(parseInt(counter,10)+1)+'" type="text" name="billing[new_fild][name][]" /></td><td><input value="" type="text" name="billing[new_fild][label][]" /></td><td><input value="" type="text" name="billing[new_fild][placeholder][]" /></td><td><input type="checkbox" name="billing[new_fild][clear][]" /></td><td><input value="" type="text" name="billing[new_fild][class][]" /></td><td>	Select <input type="radio" value="select" name="billing[new_fild][type][][' + (parseInt(counter, 10) + 1) + ']"><br>Radio <input type="radio" value="radio" name="billing[new_fild][type][][' + (parseInt(counter, 10) + 1) + ']"><br>Checkbox <input type="radio" value="checkbox" name="billing[new_fild][type][][' + (parseInt(counter, 10) + 1) + ']"><br>	Textarea <input type="radio" value="textarea" name="billing[new_fild][type][][' + (parseInt(counter, 10) + 1) + ']"><br>	Text <input type="radio" value="" name="billing[new_fild][type][][' + (parseInt(counter, 10) + 1) + ']" checked="checked"></td><td><input checked type="checkbox" name="billing[new_fild][required][]" /></td><td><input checked type="checkbox" name="billing[new_fild][public][]" /></td>' + fild_pm + '<td><input id="order_count" rel="sort_order" type="hidden" name="billing[new_fild][order][]" value="'+(parseInt(counter,10)+1)+'" /><input type="button" class="button" id="billing_delete" value="Удалить -"/></td>');
-				obj.removeClass('nodrop nodrag');
-				obj.after('<tr  class="nodrop nodrag"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td><input type="button" class="button" id="billing" value="Добавить +"/></td></tr>');
-			});
-			jQuery("body").delegate('.button#shipping', 'click',function() {
-				var obj = jQuery(this).parent().parent();
-				fild_pm = '<td>\
-						<select multiple="multiple" width="120px" name="shipping[new_fild][payment_method][]">\
-							<option selected value="0">Все</option>\
-							<?php 
-								foreach ( $woocommerce->payment_gateways->payment_gateways() as $gateway ) {
-									if ( $gateway->enabled != 'yes' ) continue;
-									?><option value="<?php echo $gateway->id; ?>" <?php if(isset($value['payment_method']) && in_array($gateway->id, (array)$value['payment_method']) ) echo 'selected';?>><?php echo str_replace("'", "\\'", $gateway->title); ?></option><?php
-								} 
-							?>\
-						</select>\
-						</td>' + '<td>\
-						<select multiple="multiple" width="120px" name="shipping[new_fild][shipping_method][]">\
-							<option selected value="0">Все</option>\
-							<?php 
-								foreach ( $woocommerce->shipping->get_shipping_methods() as $act_id => $shipping ) {
-									if ( $shipping->enabled == 'no' ) continue;
-									?><option value="<?php echo $act_id; ?>" <?php if(isset($value['shipping_method']) && in_array($act_id, (array)$value['shipping_method']) ) echo 'selected';?>><?php $st = $shipping->title ? $shipping->title: $shipping->method_title; echo str_replace("'", "\\'", $st); ?></option><?php
-								}  
-							?>\
-						</select>\
-						</td>';
-				var counter = obj.parent().find('tr td input#order_count:last').length ? obj.parent().find('tr td input#order_count:last').val() : 0;
-				obj.html('<td><input value="shipping_new_fild'+(parseInt(counter,10)+1)+'" type="text" name="shipping[new_fild][name][]" /></td><td><input value="" type="text" name="shipping[new_fild][label][]" /></td><td><input value="" type="text" name="shipping[new_fild][placeholder][]" /></td><td><input type="checkbox" name="shipping[new_fild][clear][]" /></td><td><input value="" type="text" name="shipping[new_fild][class][]" /></td><td><input checked type="checkbox" name="shipping[new_fild][required][]" /></td><td><input checked type="checkbox" name="shipping[new_fild][public][]" /></td>' + fild_pm + '<td><input id="order_count" rel="sort_order" type="hidden" name="shipping[new_fild][order][]" value="'+(parseInt(counter,10)+1)+'" /><input type="button" class="button" id="billing_delete" value="Удалить -"/></td>');
-				obj.removeClass('nodrop nodrag');
-				obj.after('<tr  class="nodrop nodrag"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td><input type="button" class="button" id="shipping" value="Добавить +"/></td></tr>');
-			});
-			jQuery("body").delegate('.button#order', 'click',function() {
-				var obj = jQuery(this).parent().parent();
-				var counter = obj.parent().find('tr td input#order_count:last').length ? obj.parent().find('tr td input#order_count:last').val() : 0;
-				obj.html('<td><input value="order_new_fild'+(parseInt(counter,10)+1)+'" type="text" name="order[new_fild][name][]" /></td><td><input value="" type="text" name="order[new_fild][label][]" /></td><td><input value="" type="text" name="order[new_fild][placeholder][]" /></td><td><input value="" type="text" name="order[new_fild][class][]" /></td><td><input checked type="text" name="order[new_fild][type][]" /></td><td><input checked type="checkbox" name="order[new_fild][public][]" /></td><td><input id="order_count" rel="sort_order" type="hidden" name="order[new_fild][order][]" value="'+(parseInt(counter,10)+1)+'" /><input type="button" class="button" id="billing_delete" value="Удалить -"/></td>');
-				obj.removeClass('nodrop nodrag');
-				obj.after('<tr  class="nodrop nodrag"><td></td><td></td><td></td><td></td><td></td><td></td><td><input type="button" class="button" id="order" value="Добавить +"/></td></tr>');
-			});
-
-			jQuery("body").delegate('.button#billing_delete', 'click',function() {
-				var obj = jQuery(this).parent().parent();
-				var obj_r = obj.parent();
-				obj.remove();
-				obj_r.find("tr").each(function(i, e){
-					jQuery(e).find("td input#order_count").val(i);
-				});
-			});
-			jQuery(document).ready(function() {
-				jQuery(".myTable").tableDnD({
-					onDragClass: "sorthelper",
-					onDrop: function(table, row) {
-						var data = new Object();
-						data.data = new Object();
-						data.key = jQuery(table).find("tr td input").attr("rel");
-						jQuery(row).fadeOut("fast").fadeIn("slow");   
-					
-						jQuery(table).find("tr").each(function(i, e){
-							var id = jQuery(e).find("td input#order_count").attr("id");
-							data.data[i] = id;
-							jQuery(e).find("td input#order_count").val(i);
-						});
-					}
-				});
-			});
-			</script>
-			<?php } elseif( $_GET["tab"] == 1) { ?>
-			<div class="clear"></div>
-			<h2 class="woo-nav-tab-wrapper">Дополнительная информация</h2>
-			<?php include_once (SAPHALI_PLUGIN_DIR_PATH . 'go_pro.php');  } elseif($_GET["tab"] == 2) { ?>
-			<div class="clear"></div>
-			<h2 class="woo-nav-tab-wrapper">Число колонок в каталоге товаров и в рубриках</h2>
-			<?php include_once (SAPHALI_PLUGIN_DIR_PATH . 'count-column.php'); } ?>
-		</div>
-		<?php
+		}
+		return false;
 	}
 	function woocommerce_get_customer_meta_fields_saph_ed() {
 		$show_fields = apply_filters('woocommerce_customer_meta_fields', array(
@@ -1700,8 +1153,8 @@ public function woocommerce_checkout_posted_data( $data ) {
 			$value_fild = @$order->order_custom_fields[$field_name][0];
 			elseif ( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) 
 			$value_fild = $order->__get( $key );
-			else $value_fild = get_post_meta( $order->get_id(), '_' . $key, true );
-			if( $value_fild && in_array($field["type"] , array('select', 'radio')) && isset($field["options"][$value_fild]) ) {
+			else $value_fild = $order->get_meta( '_' . $key );
+			if( $value_fild && isset($field["type"]) && in_array($field["type"] , array('select', 'radio')) && isset($field["options"][$value_fild]) ) {
 				$value_fild = $field["options"][$value_fild];
 			}
 			if ( $value_fild && !empty($field['label']) ) echo '<p><strong>'.$field['label'].':</strong> '.$value_fild.'</p>';
@@ -1722,7 +1175,7 @@ public function woocommerce_checkout_posted_data( $data ) {
 			$value_fild = @$order->order_custom_fields[$field_name][0];
 			elseif ( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) 
 			$value_fild = $order->__get( $key );
-			else $value_fild = get_post_meta( $order->get_id(), '_' . $key, true );
+			else $value_fild = $order->get_meta( '_' . $key );
 			if ( $value_fild && !empty($field['label']) ) echo '<p><strong>'.$field['label'].':</strong> '.$value_fild.'</p>';
 			
 			endforeach;
@@ -1740,7 +1193,7 @@ public function woocommerce_checkout_posted_data( $data ) {
 			$value_fild = @$order->order_custom_fields[$field_name][0];
 			elseif ( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) 
 			$value_fild = $order->__get( $key );
-			else $value_fild = get_post_meta( $order->get_id(), '_' . $key, true );
+			else $value_fild = $order->get_meta( '_' . $key );
 			if ( $value_fild && !empty($field['label']) ) 
 
 			echo '<div class="form-field form-field-wide"><label>'. $field['label']. ':</label> ' . $value_fild.'</div>';
@@ -1895,7 +1348,7 @@ public function woocommerce_checkout_posted_data( $data ) {
 					$value_fild = @$order->order_custom_fields[$field_name][0];
 					elseif ( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) 
 					$value_fild = $order->__get( $key );
-					else $value_fild = get_post_meta( $order->get_id(), '_' . $key, true );
+					else $value_fild = $order->get_meta( '_' . $key );
 					if( $value_fild && isset($field["type"]) && in_array($field["type"] , array('select', 'radio')) && isset($field["options"][$value_fild]) ) {
 						$value_fild = $field["options"][$value_fild];
 					}
@@ -1910,7 +1363,7 @@ public function woocommerce_checkout_posted_data( $data ) {
 					$value_fild = @$order->order_custom_fields[$field_name][0];
 					elseif ( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) 
 					$value_fild = $order->__get( $key );
-					else $value_fild = get_post_meta( $order->get_id(), '_' . $key, true );
+					else $value_fild = $order->get_meta( '_' . $key );
 					if ( $value_fild  && !empty($field['label'])) 
 					echo '<div class="form-field form-field-wide"><label><strong>'. $field['label']. ':</strong></label> ' . $value_fild.'</div>';
 				endforeach;
@@ -1924,7 +1377,7 @@ public function woocommerce_checkout_posted_data( $data ) {
 				elseif ( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) 
 					$value_fild = $order->__get( $key );
 				else 
-					$value_fild = get_post_meta( $order->get_id(), '_' . $key, true );
+					$value_fild = $order->get_meta( '_' . $key );
 				if ( $value_fild && !empty($field['label']) ) 
 
 				echo '<div class="form-field form-field-wide"><label><strong>'. $field['label']. ':</strong></label> ' . $value_fild.'</div>';
@@ -1986,41 +1439,41 @@ public function woocommerce_checkout_posted_data( $data ) {
 
 			echo '<div class="address">';
 
-			if(is_array($billing_data["billing"]) && !$_billing_data) {
+			if(isset($billing_data["billing"]) && is_array($billing_data["billing"]) && !$_billing_data) {
 				foreach ( $billing_data["billing"] as $key => $field ) : if (isset($field['show']) && !$field['show']) continue;
 					$field_name = '_'.$key;
 					if ( version_compare( WOOCOMMERCE_VERSION, '2.1.0', '<' ) ) 
 					$value_fild = @$order->order_custom_fields[$field_name][0];
 					elseif ( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) 
 					$value_fild = $order->__get( $key );
-					else $value_fild = get_post_meta( $order->get_id(), '_' . $key, true );
-					if( $value_fild && in_array($field["type"] , array('select', 'radio')) && isset($field["options"][$value_fild]) ) {
+					else $value_fild = $order->get_meta( '_' . $key );
+					if( $value_fild && isset($field["type"]) && in_array($field["type"] , array('select', 'radio')) && isset($field["options"][$value_fild]) ) {
 						$value_fild = $field["options"][$value_fild];
 					}
 					if ( $value_fild  && !empty($field['label'])) 
 					echo '<div class="form-field form-field-wide"><label><strong>'. $field['label']. ':</strong></label> ' . $value_fild.'</div>';
 				endforeach;
 			}
-			if(is_array($billing_data["shipping"]) && !$_shipping_data) {
+			if(isset($billing_data["shipping"]) && is_array($billing_data["shipping"]) && !$_shipping_data) {
 				foreach ( $billing_data["shipping"] as $key => $field ) : if (isset($field['show']) && !$field['show']) continue;
 					$field_name = '_'.$key;
 					if ( version_compare( WOOCOMMERCE_VERSION, '2.1.0', '<' ) ) 
 					$value_fild = @$order->order_custom_fields[$field_name][0];
 					elseif ( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) 
 					$value_fild = $order->__get( $key );
-					else $value_fild = get_post_meta( $order->get_id(), '_' . $key, true );
+					else $value_fild = $order->get_meta( '_' . $key );
 					if ( $value_fild  && !empty($field['label']) ) 
 					echo '<div class="form-field form-field-wide"><label><strong>'. $field['label']. ':</strong></label> ' . $value_fild.'</div>';
 				endforeach;
 			}
-			if(is_array($billing_data["order"]) ) {
+			if(isset($billing_data["order"]) && is_array($billing_data["order"]) ) {
 				foreach ( $billing_data["order"] as $key => $field ) : if (isset($field['show']) && !$field['show']) continue;
 					$field_name = '_'.$key;
 					if ( version_compare( WOOCOMMERCE_VERSION, '2.1.0', '<' ) ) 
 					$value_fild = @$order->order_custom_fields[$field_name][0];
 					elseif ( version_compare( WOOCOMMERCE_VERSION, '3.0', '<' ) ) 
 					$value_fild = $order->__get( $key );
-					else $value_fild = get_post_meta( $order->get_id(), '_' . $key, true );
+					else $value_fild = $order->get_meta( '_' . $key );
 					if ( $value_fild && !empty($field['label']) ) 
 					echo '<div class="form-field form-field-wide"><label><strong>'. $field['label']. ':</strong></label> ' . $value_fild.'</div>';
 				endforeach;
@@ -2058,13 +1511,21 @@ if ( ! function_exists( 'woocommerce_lang_s_l' ) ) {
 	function woocommerce_lang_s_l() {
 		if ( ! defined( 'WOOCOMMERCE_VERSION' ) )
 			return;
-		$lite = new saphali_lite();
+		if ( !version_compare( WOOCOMMERCE_VERSION, '8.5.0', '<' ) && ! defined( 'WC_BLOCKS_IS_FEATURE_PLUGIN' ) ) {
+			define( 'WC_BLOCKS_IS_FEATURE_PLUGIN', true );
+		}
+		$lite = SaphWooManageFields();
 		if( is_admin() )
 		add_action( 'admin_enqueue_scripts',  array( $lite, 'admin_enqueue_scripts_page_saphali' ) );
 	}
 }
+function SaphWooManageFields()
+{
+    return saphali_lite::instance();
+}
 //END
 
+require_once (SAPHALI_PLUGIN_DIR_PATH . 'address-block-editor.php'); 
 
 register_activation_hook( __FILE__, 'saphali_woo_lite_install' );
 
