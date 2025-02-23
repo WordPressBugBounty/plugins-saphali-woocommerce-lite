@@ -6,7 +6,7 @@ Donate link: https://saphali.com/donations
 Tags: woocommerce, woo commerce Lite, russian ruble, ukrainian hryvnia, mod, manager fields checkout
 Requires at least: WP 3.3 or higher & WooCommerce 1.6.6 or higher
 Tested up to: 6.7
-Stable tag: 2.0.0
+Stable tag: 2.0.1
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -58,6 +58,9 @@ In case of an error (in WC > 3.4) "<em>Please enter an address to continue</em>"
 6. Switch to Classic Shortcode when editing the Checkout page.
 
 == Changelog ==
+
+= 2.0.1 =
+* Localization issue
 
 = 2.0.0 =
 * Support for Checkout Blocks.

@@ -3,7 +3,7 @@
 Plugin Name: Saphali Woocommerce Lite
 Plugin URI: http://saphali.com/saphali-woocommerce-plugin-wordpress
 Description: Saphali Woocommerce Lite - это бесплатный вордпресс плагин, который добавляет набор дополнений к интернет-магазину на Woocommerce.
-Version: 2.0.0
+Version: 2.0.1
 Author: Saphali
 Author URI: http://saphali.com/
 Text Domain: saphali-woocommerce-lite
@@ -70,10 +70,12 @@ use Automattic\WooCommerce\Blocks\Utils\CartCheckoutUtils;
         return self::$_instance;
     }
 	function __construct() {
-		if ( version_compare( WOOCOMMERCE_VERSION, '2.2.0', '<' ) || version_compare( WOOCOMMERCE_VERSION, '2.5.0', '>' ) )
-		add_action('before_woocommerce_init', array($this,'load_plugin_textdomain'), 9);
-	else
-		add_action('before_woocommerce_init', array($this,'load_plugin_textdomain_th'), 9);
+		add_action('before_woocommerce_init', array($this,'woocommerce_init'), 9);
+		if ( version_compare( WOOCOMMERCE_VERSION, '2.2.0', '<' ) || version_compare( WOOCOMMERCE_VERSION, '2.5.0', '>' ) ) {
+			add_action( 'init', array($this,'load_plugin_textdomain') );
+		}	else {
+			add_action( 'init', array($this,'load_plugin_textdomain_th') );
+		}
 		
 		if ( version_compare( WOOCOMMERCE_VERSION, '2.1.0', '<' ) )  add_action('admin_menu', array($this,'woocommerce_saphali_admin_menu_s_l'), 9);
 		else add_action('admin_menu', array($this,'woocommerce_saphali_admin_menu_s_l'), 10);
@@ -696,13 +698,16 @@ public function woocommerce_checkout_posted_data( $data ) {
 		<?php
 		}
 	}
-	public function load_plugin_textdomain() {
-		load_plugin_textdomain( 'woocommerce',  false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
-		load_plugin_textdomain( 'saphali-woocommerce-lite',  false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+	public function woocommerce_init() {
 		// HPOS compatibility declaration.
 		if ( class_exists( FeaturesUtil::class ) ) {
 			FeaturesUtil::declare_compatibility( 'custom_order_tables', plugin_basename( __FILE__ ), true );
 		}
+	}
+	public function load_plugin_textdomain() {
+		load_plugin_textdomain( 'woocommerce',  false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+		// load_textdomain('saphali-woocommerce-lite', WP_PLUGIN_DIR . '/saphali-woocommerce-lite/languages/saphali-woocommerce-lite-'.get_locale().'.mo');
+		load_plugin_textdomain( 'saphali-woocommerce-lite',  false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 	}
 	public function load_plugin_textdomain_th() {
 		load_plugin_textdomain( 'saphali-woocommerce-lite',  false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
@@ -854,6 +859,7 @@ public function woocommerce_checkout_posted_data( $data ) {
                     'delete' => __('Удалить', 'saphali-woocommerce-lite'),
                     'add' => __('Добавить', 'saphali-woocommerce-lite'),
                     'add2' => __('Добавить еще', 'saphali-woocommerce-lite'),
+                    'all' => __('Все', 'saphali-woocommerce-lite'),
 					'saphaliKeys' => $get_keys['keys'],
 					'saphaliSkeys' => $get_keys['skeys'],
                 ) // Массив с ключами
@@ -1516,7 +1522,7 @@ if ( ! function_exists( 'woocommerce_lang_s_l' ) ) {
 		}
 		$lite = SaphWooManageFields();
 		if( is_admin() )
-		add_action( 'admin_enqueue_scripts',  array( $lite, 'admin_enqueue_scripts_page_saphali' ) );
+			add_action( 'admin_enqueue_scripts',  array( $lite, 'admin_enqueue_scripts_page_saphali' ) );
 	}
 }
 function SaphWooManageFields()

@@ -120,13 +120,13 @@
           '<select multiple="multiple" width="120px" name="' +
           val +
           '[new][payment_method][]">\
-                                <option selected value="0">Все</option>' +
+                                <option selected value="0">'+saphaliSettings.all+'</option>' +
           options_payment_method +
           '</select>' : '') + '</td>' +
           '<td>'+  (val !== 'account' ? '<select multiple="multiple" width="120px" name="' +
           val +
           '[new][shipping_method][]">\
-                                <option selected value="0">Все</option>' +
+                                <option selected value="0">'+saphaliSettings.all+'</option>' +
            options_shipping_method +
           '</select>' : '') +
         '</td>' +

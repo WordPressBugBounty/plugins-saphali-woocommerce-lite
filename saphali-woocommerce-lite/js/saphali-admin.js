@@ -92,11 +92,11 @@
           '<td><select multiple="multiple" width="120px" name="' +
           val +
           '[new][payment_method][]">\
-                            <option selected value="0">Все</option></select></td>' +
+                            <option selected value="0">'+saphaliSettings.all+'</option></select></td>' +
           '<td><select multiple="multiple" width="120px" name="' +
           val +
           '[new][shipping_method][]">\
-                            <option selected value="0">Все</option></select></td>' +
+                            <option selected value="0">'+saphaliSettings.all+'</option></select></td>' +
           '<td><button class="button remove-row">X</button></td>' +
           "</tr>";
         // $('#billing_fields_table .myTable').append(row);
@@ -252,7 +252,7 @@
     fild_pm =
       '<td>\
                 <select multiple="multiple" width="120px" name="billing[new_fild][payment_method][]">\
-                    <option selected value="0">Все</option>\
+                    <option selected value="0">'+saphaliSettings.all+'</option>\
                     ' +
       options_payment_method +
       "\
@@ -260,7 +260,7 @@
                 </td>" +
       '<td>\
                 <select multiple="multiple" width="120px" name="billing[new_fild][shipping_method][]">\
-                    <option selected value="0">Все</option>\
+                    <option selected value="0">'+saphaliSettings.all+'</option>\
                     ' +
       options_shipping_method +
       "\
@@ -305,7 +305,7 @@
     fild_pm =
       '<td>\
                 <select multiple="multiple" width="120px" name="shipping[new_fild][payment_method][]">\
-                    <option selected value="0">Все</option>\
+                    <option selected value="0">'+saphaliSettings.all+'</option>\
                      ' +
       options_payment_method +
       "\
@@ -313,7 +313,7 @@
                 </td>" +
       '<td>\
                 <select multiple="multiple" width="120px" name="shipping[new_fild][shipping_method][]">\
-                    <option selected value="0">Все</option>\
+                    <option selected value="0">'+saphaliSettings.all+'</option>\
                    ' +
       options_shipping_method +
       "\
