@@ -3,9 +3,9 @@ Contributors: Saphali
 Plugin Name: Saphali Woocommerce Lite
 Plugin URI: http://saphali.com/saphali-woocommerce-plugin-wordpress
 Donate link: https://saphali.com/donations
-Tags: woocommerce, woo commerce Lite, russian ruble, ukrainian hryvnia, mod, manager fields checkout
-Requires at least: WP 3.3 or higher & WooCommerce 1.6.6 or higher
-Tested up to: 6.7
+Tags: woocommerce, woo commerce Lite, russian ruble, ukrainian hryvnia, manager fields checkout
+Requires at least: 4.5
+Tested up to: 6.8
 Stable tag: 2.0.1
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html

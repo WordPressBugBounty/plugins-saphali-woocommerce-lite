@@ -376,12 +376,12 @@ if (! class_exists('Saphali_DateTime_Checkout_Field')) :
             load_script_textdomain('saphali-fields-frontend', 'saphali-woocommerce-lite', plugin_dir_path(__FILE__) . 'languages');
 
             // Подключаем скомпилированный frontend.css
-            // wp_enqueue_style(
-            //     'saphali-fields-frontend',
-            //     plugins_url('build/frontend/frontend.css.css', __FILE__),
-            //     array(),
-            //     '1.0.0'
-            // );
+            wp_enqueue_style(
+                'saphali-fields-frontend',
+                plugins_url('build/frontend/frontend.css', __FILE__),
+                array(),
+                '1.0.0'
+            );
         }
 
         /**
